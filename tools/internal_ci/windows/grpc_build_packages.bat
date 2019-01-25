@@ -28,9 +28,17 @@ call tools/internal_ci/helper_scripts/prepare_build_windows.bat
 powershell -Command "mv %KOKORO_GFILE_DIR%\github\grpc\artifacts input_artifacts"
 dir input_artifacts
 
-python tools/run_tests/task_runner.py -f package windows -j 4
-set RUNTESTS_EXITCODE=%errorlevel%
+@rem TODO: do the signing...
+
+@rem Adjust the location of nuget.exe
+set NUGET=C:\nuget\nuget.exe
+set DOTNET=dotnet
+set SIGNTOOL="c:\Program Files (x86)\Windows kits\10\bin\x86\signtool.exe"
+
+%NUGET% update -self
+%NUGET% sign Grpc.Core.1.18.0.nupkg -CertificateSubjectName "Google Inc" -Timestamper http://timestamp.comodoca.com/authenticode
+
+mkdir artifacts
+xcopy /Y /I *.nupkg artifacts\ 
 
 bash tools/internal_ci/helper_scripts/delete_nonartifacts.sh
-
-exit /b %RUNTESTS_EXITCODE%
