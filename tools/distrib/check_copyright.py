@@ -75,8 +75,6 @@ _EXEMPT = frozenset((
     'examples/python/multiplex/route_guide_pb2_grpc.py',
     'examples/python/route_guide/route_guide_pb2.py',
     'examples/python/route_guide/route_guide_pb2_grpc.py',
-    'src/core/ext/filters/client_channel/health/health.pb.h',
-    'src/core/ext/filters/client_channel/health/health.pb.c',
     'src/core/ext/filters/client_channel/lb_policy/grpclb/proto/grpc/lb/v1/load_balancer.pb.h',
     'src/core/ext/filters/client_channel/lb_policy/grpclb/proto/grpc/lb/v1/load_balancer.pb.c',
     'src/core/ext/filters/client_channel/lb_policy/grpclb/proto/grpc/lb/v1/google/protobuf/duration.pb.h',
@@ -153,6 +151,9 @@ except subprocess.CalledProcessError:
 
 for filename in filename_list:
     if filename in _EXEMPT:
+        continue
+    # Skip check for upb generated code.
+    if filename.endswith('.upb.h') or filename.endswith('.upb.c'):
         continue
     ext = os.path.splitext(filename)[1]
     base = os.path.basename(filename)

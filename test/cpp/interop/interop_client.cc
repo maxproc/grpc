@@ -294,6 +294,25 @@ bool InteropClient::DoJwtTokenCreds(const grpc::string& username) {
   return true;
 }
 
+bool InteropClient::DoGoogleDefaultCredentials(
+    const grpc::string& default_service_account) {
+  gpr_log(GPR_DEBUG,
+          "Sending a large unary rpc with GoogleDefaultCredentials...");
+  SimpleRequest request;
+  SimpleResponse response;
+  request.set_fill_username(true);
+
+  if (!PerformLargeUnary(&request, &response)) {
+    return false;
+  }
+
+  gpr_log(GPR_DEBUG, "Got username %s", response.username().c_str());
+  GPR_ASSERT(!response.username().empty());
+  GPR_ASSERT(response.username().c_str() == default_service_account);
+  gpr_log(GPR_DEBUG, "Large unary rpc with GoogleDefaultCredentials done.");
+  return true;
+}
+
 bool InteropClient::DoLargeUnary() {
   gpr_log(GPR_DEBUG, "Sending a large unary rpc...");
   SimpleRequest request;
@@ -926,6 +945,32 @@ bool InteropClient::DoCacheableUnary() {
 
   // Check that the response is different from the previous response.
   GPR_ASSERT(response3.payload().body() != response1.payload().body());
+  return true;
+}
+
+bool InteropClient::DoPickFirstUnary() {
+  const int rpcCount = 100;
+  SimpleRequest request;
+  SimpleResponse response;
+  std::string server_id;
+  request.set_fill_server_id(true);
+  for (int i = 0; i < rpcCount; i++) {
+    ClientContext context;
+    Status s = serviceStub_.Get()->UnaryCall(&context, request, &response);
+    if (!AssertStatusOk(s, context.debug_error_string())) {
+      return false;
+    }
+    if (i == 0) {
+      server_id = response.server_id();
+      continue;
+    }
+    if (response.server_id() != server_id) {
+      gpr_log(GPR_ERROR, "#%d rpc hits server_id %s, expect server_id %s", i,
+              response.server_id().c_str(), server_id.c_str());
+      return false;
+    }
+  }
+  gpr_log(GPR_DEBUG, "pick first unary successfully finished");
   return true;
 }
 

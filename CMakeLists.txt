@@ -21,10 +21,10 @@
 
 
 
-cmake_minimum_required(VERSION 2.8)
+cmake_minimum_required(VERSION 3.5.1)
 
 set(PACKAGE_NAME      "grpc")
-set(PACKAGE_VERSION   "1.19.0-dev")
+set(PACKAGE_VERSION   "1.24.0-dev")
 set(PACKAGE_STRING    "${PACKAGE_NAME} ${PACKAGE_VERSION}")
 set(PACKAGE_TARNAME   "${PACKAGE_NAME}-${PACKAGE_VERSION}")
 set(PACKAGE_BUGREPORT "https://github.com/grpc/grpc/issues/")
@@ -82,6 +82,8 @@ if(UNIX)
     set(_gRPC_PLATFORM_LINUX ON)
   elseif(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
     set(_gRPC_PLATFORM_MAC ON)
+  elseif(${CMAKE_SYSTEM_NAME} MATCHES "iOS")
+    set(_gRPC_PLATFORM_IOS ON)
   elseif(${CMAKE_SYSTEM_NAME} MATCHES "Android")
     set(_gRPC_PLATFORM_ANDROID ON)
   else()
@@ -124,7 +126,7 @@ if(gRPC_BACKWARDS_COMPATIBILITY_MODE)
   endif()
 endif()
 
-if (_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC)
+if (_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_IOS)
   # C core has C++ source code, but should not depend on libstc++ (for better portability).
   # We need to use a few tricks to convince cmake to do that.
   # https://stackoverflow.com/questions/15058403/how-to-stop-cmake-from-linking-against-libstdc
@@ -135,21 +137,22 @@ else()
   set(_gRPC_CORE_NOSTDCXX_FLAGS "")
 endif()
 
-include(cmake/zlib.cmake)
+include(cmake/address_sorting.cmake)
+include(cmake/benchmark.cmake)
 include(cmake/cares.cmake)
+include(cmake/gflags.cmake)
+include(cmake/nanopb.cmake)
 include(cmake/protobuf.cmake)
 include(cmake/ssl.cmake)
-include(cmake/gflags.cmake)
-include(cmake/benchmark.cmake)
-include(cmake/address_sorting.cmake)
-include(cmake/nanopb.cmake)
+include(cmake/upb.cmake)
+include(cmake/zlib.cmake)
 
 if(NOT MSVC)
   set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS} -std=c99")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
 endif()
 
-if(_gRPC_PLATFORM_MAC)
+if(_gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_IOS)
   set(_gRPC_ALLTARGETS_LIBRARIES ${CMAKE_DL_LIBS} m pthread)
 elseif(_gRPC_PLATFORM_ANDROID)
   set(_gRPC_ALLTARGETS_LIBRARIES ${CMAKE_DL_LIBS} m)
@@ -190,6 +193,13 @@ function(protobuf_generate_grpc_cpp)
     get_filename_component(REL_DIR ${REL_FIL} DIRECTORY)
     set(RELFIL_WE "${REL_DIR}/${FIL_WE}")
 
+    #if cross-compiling, find host plugin
+    if(CMAKE_CROSSCOMPILING)
+        find_program(_gRPC_CPP_PLUGIN grpc_cpp_plugin)
+    else()
+        set(_gRPC_CPP_PLUGIN $<TARGET_FILE:grpc_cpp_plugin>)
+    endif()
+
     add_custom_command(
       OUTPUT "${_gRPC_PROTO_GENS_DIR}/${RELFIL_WE}.grpc.pb.cc"
              "${_gRPC_PROTO_GENS_DIR}/${RELFIL_WE}.grpc.pb.h"
@@ -199,7 +209,7 @@ function(protobuf_generate_grpc_cpp)
       COMMAND ${_gRPC_PROTOBUF_PROTOC_EXECUTABLE}
       ARGS --grpc_out=generate_mock_code=true:${_gRPC_PROTO_GENS_DIR}
            --cpp_out=${_gRPC_PROTO_GENS_DIR}
-           --plugin=protoc-gen-grpc=$<TARGET_FILE:grpc_cpp_plugin>
+           --plugin=protoc-gen-grpc=${_gRPC_CPP_PLUGIN}
            ${_protobuf_include_path}
            ${REL_FIL}
       DEPENDS ${ABS_FIL} ${_gRPC_PROTOBUF_PROTOC} grpc_cpp_plugin
@@ -257,13 +267,17 @@ add_dependencies(buildtests_c channel_create_test)
 add_dependencies(buildtests_c chttp2_hpack_encoder_test)
 add_dependencies(buildtests_c chttp2_stream_map_test)
 add_dependencies(buildtests_c chttp2_varint_test)
+if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
+add_dependencies(buildtests_c close_fd_test)
+endif()
 add_dependencies(buildtests_c cmdline_test)
 add_dependencies(buildtests_c combiner_test)
 add_dependencies(buildtests_c compression_test)
 add_dependencies(buildtests_c concurrent_connectivity_test)
 add_dependencies(buildtests_c connection_refused_test)
 add_dependencies(buildtests_c dns_resolver_connectivity_test)
-add_dependencies(buildtests_c dns_resolver_cooldown_test)
+add_dependencies(buildtests_c dns_resolver_cooldown_using_ares_resolver_test)
+add_dependencies(buildtests_c dns_resolver_cooldown_using_native_resolver_test)
 add_dependencies(buildtests_c dns_resolver_test)
 if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
 add_dependencies(buildtests_c dualstack_socket_test)
@@ -318,8 +332,8 @@ add_dependencies(buildtests_c grpc_channel_stack_builder_test)
 add_dependencies(buildtests_c grpc_channel_stack_test)
 add_dependencies(buildtests_c grpc_completion_queue_test)
 add_dependencies(buildtests_c grpc_completion_queue_threading_test)
+add_dependencies(buildtests_c grpc_control_plane_credentials_test)
 add_dependencies(buildtests_c grpc_credentials_test)
-add_dependencies(buildtests_c grpc_fetch_oauth2)
 add_dependencies(buildtests_c grpc_ipv6_loopback_available_test)
 if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
 add_dependencies(buildtests_c grpc_json_token_test)
@@ -366,6 +380,7 @@ add_dependencies(buildtests_c memory_usage_test)
 endif()
 add_dependencies(buildtests_c message_compress_test)
 add_dependencies(buildtests_c minimal_stack_is_minimal_test)
+add_dependencies(buildtests_c mpmcqueue_test)
 add_dependencies(buildtests_c multiple_server_queues_test)
 add_dependencies(buildtests_c murmur_hash_test)
 add_dependencies(buildtests_c no_server_test)
@@ -414,6 +429,7 @@ if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
 add_dependencies(buildtests_c tcp_server_posix_test)
 endif()
 add_dependencies(buildtests_c tcp_server_uv_test)
+add_dependencies(buildtests_c threadpool_test)
 add_dependencies(buildtests_c time_averaged_stats_test)
 add_dependencies(buildtests_c timeout_encoding_test)
 add_dependencies(buildtests_c timer_heap_test)
@@ -427,21 +443,7 @@ if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
 add_dependencies(buildtests_c udp_server_test)
 endif()
 add_dependencies(buildtests_c uri_parser_test)
-if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
-add_dependencies(buildtests_c wakeup_fd_cv_test)
-endif()
 add_dependencies(buildtests_c public_headers_must_be_c89)
-add_dependencies(buildtests_c badreq_bad_client_test)
-add_dependencies(buildtests_c connection_prefix_bad_client_test)
-add_dependencies(buildtests_c duplicate_header_bad_client_test)
-add_dependencies(buildtests_c head_of_line_blocking_bad_client_test)
-add_dependencies(buildtests_c headers_bad_client_test)
-add_dependencies(buildtests_c initial_settings_frame_bad_client_test)
-add_dependencies(buildtests_c large_metadata_bad_client_test)
-add_dependencies(buildtests_c server_registered_method_bad_client_test)
-add_dependencies(buildtests_c simple_request_bad_client_test)
-add_dependencies(buildtests_c unknown_frame_bad_client_test)
-add_dependencies(buildtests_c window_overflow_bad_client_test)
 if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
 add_dependencies(buildtests_c bad_ssl_cert_server)
 endif()
@@ -475,7 +477,9 @@ add_dependencies(buildtests_c h2_proxy_test)
 add_dependencies(buildtests_c h2_sockpair_test)
 add_dependencies(buildtests_c h2_sockpair+trace_test)
 add_dependencies(buildtests_c h2_sockpair_1byte_test)
+add_dependencies(buildtests_c h2_spiffe_test)
 add_dependencies(buildtests_c h2_ssl_test)
+add_dependencies(buildtests_c h2_ssl_cred_reload_test)
 add_dependencies(buildtests_c h2_ssl_proxy_test)
 if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
 add_dependencies(buildtests_c h2_uds_test)
@@ -535,6 +539,9 @@ add_dependencies(buildtests_cxx auth_property_iterator_test)
 add_dependencies(buildtests_cxx backoff_test)
 add_dependencies(buildtests_cxx bdp_estimator_test)
 if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
+add_dependencies(buildtests_cxx bm_alarm)
+endif()
+if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
 add_dependencies(buildtests_cxx bm_arena)
 endif()
 if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
@@ -542,6 +549,12 @@ add_dependencies(buildtests_cxx bm_byte_buffer)
 endif()
 if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
 add_dependencies(buildtests_cxx bm_call_create)
+endif()
+if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
+add_dependencies(buildtests_cxx bm_callback_streaming_ping_pong)
+endif()
+if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
+add_dependencies(buildtests_cxx bm_callback_unary_ping_pong)
 endif()
 if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
 add_dependencies(buildtests_cxx bm_channel)
@@ -583,6 +596,9 @@ if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
 add_dependencies(buildtests_cxx bm_pollset)
 endif()
 if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
+add_dependencies(buildtests_cxx bm_threadpool)
+endif()
+if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
 add_dependencies(buildtests_cxx bm_timer)
 endif()
 add_dependencies(buildtests_cxx byte_stream_test)
@@ -612,18 +628,26 @@ add_dependencies(buildtests_cxx cxx_byte_buffer_test)
 add_dependencies(buildtests_cxx cxx_slice_test)
 add_dependencies(buildtests_cxx cxx_string_ref_test)
 add_dependencies(buildtests_cxx cxx_time_test)
+add_dependencies(buildtests_cxx delegating_channel_test)
 add_dependencies(buildtests_cxx end2end_test)
 add_dependencies(buildtests_cxx error_details_test)
 add_dependencies(buildtests_cxx exception_test)
 add_dependencies(buildtests_cxx filter_end2end_test)
 add_dependencies(buildtests_cxx generic_end2end_test)
+add_dependencies(buildtests_cxx global_config_env_test)
+add_dependencies(buildtests_cxx global_config_test)
 add_dependencies(buildtests_cxx golden_file_test)
 add_dependencies(buildtests_cxx grpc_alts_credentials_options_test)
 add_dependencies(buildtests_cxx grpc_cli)
+add_dependencies(buildtests_cxx grpc_core_map_test)
+add_dependencies(buildtests_cxx grpc_fetch_oauth2)
 add_dependencies(buildtests_cxx grpc_linux_system_roots_test)
 add_dependencies(buildtests_cxx grpc_tool_test)
 add_dependencies(buildtests_cxx grpclb_api_test)
 add_dependencies(buildtests_cxx grpclb_end2end_test)
+if(_gRPC_PLATFORM_LINUX)
+add_dependencies(buildtests_cxx grpclb_fallback_test)
+endif()
 add_dependencies(buildtests_cxx h2_ssl_cert_test)
 add_dependencies(buildtests_cxx h2_ssl_session_reuse_test)
 add_dependencies(buildtests_cxx health_service_end2end_test)
@@ -648,12 +672,14 @@ if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
 add_dependencies(buildtests_cxx json_run_localhost)
 endif()
 add_dependencies(buildtests_cxx memory_test)
+add_dependencies(buildtests_cxx message_allocator_end2end_test)
 add_dependencies(buildtests_cxx metrics_client)
 add_dependencies(buildtests_cxx mock_test)
 add_dependencies(buildtests_cxx nonblocking_test)
 add_dependencies(buildtests_cxx noop-benchmark)
 add_dependencies(buildtests_cxx optional_test)
 add_dependencies(buildtests_cxx orphanable_test)
+add_dependencies(buildtests_cxx port_sharing_end2end_test)
 add_dependencies(buildtests_cxx proto_server_reflection_test)
 add_dependencies(buildtests_cxx proto_utils_test)
 if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
@@ -687,6 +713,8 @@ add_dependencies(buildtests_cxx server_crash_test_client)
 add_dependencies(buildtests_cxx server_early_return_test)
 add_dependencies(buildtests_cxx server_interceptors_end2end_test)
 add_dependencies(buildtests_cxx server_request_call_test)
+add_dependencies(buildtests_cxx service_config_end2end_test)
+add_dependencies(buildtests_cxx service_config_test)
 add_dependencies(buildtests_cxx shutdown_test)
 add_dependencies(buildtests_cxx slice_hash_table_test)
 add_dependencies(buildtests_cxx slice_weak_hash_table_test)
@@ -697,13 +725,31 @@ if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
 add_dependencies(buildtests_cxx streaming_throughput_test)
 endif()
 add_dependencies(buildtests_cxx stress_test)
+add_dependencies(buildtests_cxx string_view_test)
 add_dependencies(buildtests_cxx thread_manager_test)
 add_dependencies(buildtests_cxx thread_stress_test)
+if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
+add_dependencies(buildtests_cxx time_change_test)
+endif()
 add_dependencies(buildtests_cxx transport_pid_controller_test)
 add_dependencies(buildtests_cxx transport_security_common_api_test)
 if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
 add_dependencies(buildtests_cxx writes_per_rpc_test)
 endif()
+add_dependencies(buildtests_cxx xds_end2end_test)
+add_dependencies(buildtests_cxx bad_streaming_id_bad_client_test)
+add_dependencies(buildtests_cxx badreq_bad_client_test)
+add_dependencies(buildtests_cxx connection_prefix_bad_client_test)
+add_dependencies(buildtests_cxx duplicate_header_bad_client_test)
+add_dependencies(buildtests_cxx head_of_line_blocking_bad_client_test)
+add_dependencies(buildtests_cxx headers_bad_client_test)
+add_dependencies(buildtests_cxx initial_settings_frame_bad_client_test)
+add_dependencies(buildtests_cxx large_metadata_bad_client_test)
+add_dependencies(buildtests_cxx out_of_bounds_bad_client_test)
+add_dependencies(buildtests_cxx server_registered_method_bad_client_test)
+add_dependencies(buildtests_cxx simple_request_bad_client_test)
+add_dependencies(buildtests_cxx unknown_frame_bad_client_test)
+add_dependencies(buildtests_cxx window_overflow_bad_client_test)
 add_dependencies(buildtests_cxx resolver_component_test_unsecure)
 add_dependencies(buildtests_cxx resolver_component_test)
 if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
@@ -742,14 +788,17 @@ endif()
 target_include_directories(address_sorting
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
   # avoid dependency on libstdc++
   if (_gRPC_CORE_NOSTDCXX_FLAGS)
@@ -794,14 +843,17 @@ endif()
 target_include_directories(alts_test_util
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
   # avoid dependency on libstdc++
   if (_gRPC_CORE_NOSTDCXX_FLAGS)
@@ -820,7 +872,6 @@ endif (gRPC_BUILD_TESTS)
 
 add_library(gpr
   src/core/lib/gpr/alloc.cc
-  src/core/lib/gpr/arena.cc
   src/core/lib/gpr/atm.cc
   src/core/lib/gpr/cpu_iphone.cc
   src/core/lib/gpr/cpu_linux.cc
@@ -829,7 +880,6 @@ add_library(gpr
   src/core/lib/gpr/env_linux.cc
   src/core/lib/gpr/env_posix.cc
   src/core/lib/gpr/env_windows.cc
-  src/core/lib/gpr/host_port.cc
   src/core/lib/gpr/log.cc
   src/core/lib/gpr/log_android.cc
   src/core/lib/gpr/log_linux.cc
@@ -853,7 +903,10 @@ add_library(gpr
   src/core/lib/gpr/tmpfile_posix.cc
   src/core/lib/gpr/tmpfile_windows.cc
   src/core/lib/gpr/wrap_memcpy.cc
+  src/core/lib/gprpp/arena.cc
   src/core/lib/gprpp/fork.cc
+  src/core/lib/gprpp/global_config_env.cc
+  src/core/lib/gprpp/host_port.cc
   src/core/lib/gprpp/thd_posix.cc
   src/core/lib/gprpp/thd_windows.cc
   src/core/lib/profiling/basic_timers.cc
@@ -875,14 +928,17 @@ endif()
 target_include_directories(gpr
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
   # avoid dependency on libstdc++
   if (_gRPC_CORE_NOSTDCXX_FLAGS)
@@ -962,10 +1018,10 @@ add_library(grpc
   src/core/lib/channel/channelz_registry.cc
   src/core/lib/channel/connected_channel.cc
   src/core/lib/channel/handshaker.cc
-  src/core/lib/channel/handshaker_factory.cc
   src/core/lib/channel/handshaker_registry.cc
   src/core/lib/channel/status_util.cc
   src/core/lib/compression/compression.cc
+  src/core/lib/compression/compression_args.cc
   src/core/lib/compression/compression_internal.cc
   src/core/lib/compression/message_compress.cc
   src/core/lib/compression/stream_compression.cc
@@ -978,12 +1034,15 @@ add_library(grpc
   src/core/lib/http/parser.cc
   src/core/lib/iomgr/buffer_list.cc
   src/core/lib/iomgr/call_combiner.cc
+  src/core/lib/iomgr/cfstream_handle.cc
   src/core/lib/iomgr/combiner.cc
   src/core/lib/iomgr/endpoint.cc
+  src/core/lib/iomgr/endpoint_cfstream.cc
   src/core/lib/iomgr/endpoint_pair_posix.cc
   src/core/lib/iomgr/endpoint_pair_uv.cc
   src/core/lib/iomgr/endpoint_pair_windows.cc
   src/core/lib/iomgr/error.cc
+  src/core/lib/iomgr/error_cfstream.cc
   src/core/lib/iomgr/ev_epoll1_linux.cc
   src/core/lib/iomgr/ev_epollex_linux.cc
   src/core/lib/iomgr/ev_poll_posix.cc
@@ -991,6 +1050,8 @@ add_library(grpc
   src/core/lib/iomgr/ev_windows.cc
   src/core/lib/iomgr/exec_ctx.cc
   src/core/lib/iomgr/executor.cc
+  src/core/lib/iomgr/executor/mpmcqueue.cc
+  src/core/lib/iomgr/executor/threadpool.cc
   src/core/lib/iomgr/fork_posix.cc
   src/core/lib/iomgr/fork_windows.cc
   src/core/lib/iomgr/gethostname_fallback.cc
@@ -1004,6 +1065,7 @@ add_library(grpc
   src/core/lib/iomgr/iomgr_custom.cc
   src/core/lib/iomgr/iomgr_internal.cc
   src/core/lib/iomgr/iomgr_posix.cc
+  src/core/lib/iomgr/iomgr_posix_cfstream.cc
   src/core/lib/iomgr/iomgr_uv.cc
   src/core/lib/iomgr/iomgr_windows.cc
   src/core/lib/iomgr/is_epollexclusive_available.cc
@@ -1032,6 +1094,7 @@ add_library(grpc
   src/core/lib/iomgr/socket_utils_windows.cc
   src/core/lib/iomgr/socket_windows.cc
   src/core/lib/iomgr/tcp_client.cc
+  src/core/lib/iomgr/tcp_client_cfstream.cc
   src/core/lib/iomgr/tcp_client_custom.cc
   src/core/lib/iomgr/tcp_client_posix.cc
   src/core/lib/iomgr/tcp_client_windows.cc
@@ -1056,7 +1119,6 @@ add_library(grpc
   src/core/lib/iomgr/udp_server.cc
   src/core/lib/iomgr/unix_sockets_posix.cc
   src/core/lib/iomgr/unix_sockets_posix_noop.cc
-  src/core/lib/iomgr/wakeup_fd_cv.cc
   src/core/lib/iomgr/wakeup_fd_eventfd.cc
   src/core/lib/iomgr/wakeup_fd_nospecial.cc
   src/core/lib/iomgr/wakeup_fd_pipe.cc
@@ -1096,7 +1158,6 @@ add_library(grpc
   src/core/lib/transport/metadata.cc
   src/core/lib/transport/metadata_batch.cc
   src/core/lib/transport/pid_controller.cc
-  src/core/lib/transport/service_config.cc
   src/core/lib/transport/static_metadata.cc
   src/core/lib/transport/status_conversion.cc
   src/core/lib/transport/status_metadata.cc
@@ -1151,6 +1212,8 @@ add_library(grpc
   src/core/lib/security/credentials/oauth2/oauth2_credentials.cc
   src/core/lib/security/credentials/plugin/plugin_credentials.cc
   src/core/lib/security/credentials/ssl/ssl_credentials.cc
+  src/core/lib/security/credentials/tls/grpc_tls_credentials_options.cc
+  src/core/lib/security/credentials/tls/spiffe_credentials.cc
   src/core/lib/security/security_connector/alts/alts_security_connector.cc
   src/core/lib/security/security_connector/fake/fake_security_connector.cc
   src/core/lib/security/security_connector/load_system_roots_fallback.cc
@@ -1159,6 +1222,7 @@ add_library(grpc
   src/core/lib/security/security_connector/security_connector.cc
   src/core/lib/security/security_connector/ssl/ssl_security_connector.cc
   src/core/lib/security/security_connector/ssl_utils.cc
+  src/core/lib/security/security_connector/tls/spiffe_security_connector.cc
   src/core/lib/security/transport/client_auth_filter.cc
   src/core/lib/security/transport/secure_endpoint.cc
   src/core/lib/security/transport/security_handshaker.cc
@@ -1202,6 +1266,12 @@ add_library(grpc
   third_party/nanopb/pb_decode.c
   third_party/nanopb/pb_encode.c
   src/core/tsi/transport_security.cc
+  third_party/upb/upb/decode.c
+  third_party/upb/upb/encode.c
+  third_party/upb/upb/msg.c
+  third_party/upb/upb/port.c
+  third_party/upb/upb/table.c
+  third_party/upb/upb/upb.c
   src/core/ext/transport/chttp2/client/insecure/channel_create.cc
   src/core/ext/transport/chttp2/client/insecure/channel_create_posix.cc
   src/core/ext/transport/chttp2/client/authority.cc
@@ -1223,16 +1293,17 @@ add_library(grpc
   src/core/ext/filters/client_channel/parse_address.cc
   src/core/ext/filters/client_channel/proxy_mapper.cc
   src/core/ext/filters/client_channel/proxy_mapper_registry.cc
-  src/core/ext/filters/client_channel/request_routing.cc
   src/core/ext/filters/client_channel/resolver.cc
   src/core/ext/filters/client_channel/resolver_registry.cc
   src/core/ext/filters/client_channel/resolver_result_parsing.cc
+  src/core/ext/filters/client_channel/resolving_lb_policy.cc
   src/core/ext/filters/client_channel/retry_throttle.cc
   src/core/ext/filters/client_channel/server_address.cc
+  src/core/ext/filters/client_channel/service_config.cc
   src/core/ext/filters/client_channel/subchannel.cc
   src/core/ext/filters/client_channel/subchannel_pool_interface.cc
   src/core/ext/filters/deadline/deadline_filter.cc
-  src/core/ext/filters/client_channel/health/health.pb.c
+  src/core/ext/upb-generated/src/proto/grpc/health/v1/health.upb.c
   src/core/tsi/fake_transport_security.cc
   src/core/tsi/local_transport_security.cc
   src/core/tsi/ssl/session_cache/ssl_session_boringssl.cc
@@ -1251,27 +1322,59 @@ add_library(grpc
   src/core/ext/filters/client_channel/lb_policy/grpclb/grpclb_channel_secure.cc
   src/core/ext/filters/client_channel/lb_policy/grpclb/grpclb_client_stats.cc
   src/core/ext/filters/client_channel/lb_policy/grpclb/load_balancer_api.cc
+  src/core/ext/upb-generated/src/proto/grpc/lb/v1/load_balancer.upb.c
+  src/core/ext/upb-generated/google/api/annotations.upb.c
+  src/core/ext/upb-generated/google/api/http.upb.c
+  src/core/ext/upb-generated/google/protobuf/any.upb.c
+  src/core/ext/upb-generated/google/protobuf/descriptor.upb.c
+  src/core/ext/upb-generated/google/protobuf/duration.upb.c
+  src/core/ext/upb-generated/google/protobuf/empty.upb.c
+  src/core/ext/upb-generated/google/protobuf/struct.upb.c
+  src/core/ext/upb-generated/google/protobuf/timestamp.upb.c
+  src/core/ext/upb-generated/google/protobuf/wrappers.upb.c
+  src/core/ext/upb-generated/google/rpc/status.upb.c
   src/core/ext/filters/client_channel/resolver/fake/fake_resolver.cc
-  src/core/ext/filters/client_channel/lb_policy/grpclb/proto/grpc/lb/v1/google/protobuf/duration.pb.c
-  src/core/ext/filters/client_channel/lb_policy/grpclb/proto/grpc/lb/v1/google/protobuf/timestamp.pb.c
-  src/core/ext/filters/client_channel/lb_policy/grpclb/proto/grpc/lb/v1/load_balancer.pb.c
   src/core/ext/filters/client_channel/lb_policy/xds/xds.cc
   src/core/ext/filters/client_channel/lb_policy/xds/xds_channel_secure.cc
   src/core/ext/filters/client_channel/lb_policy/xds/xds_client_stats.cc
   src/core/ext/filters/client_channel/lb_policy/xds/xds_load_balancer_api.cc
+  src/core/ext/upb-generated/envoy/api/v2/auth/cert.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/cds.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/cluster/circuit_breaker.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/cluster/outlier_detection.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/discovery.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/eds.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/endpoint/endpoint.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/endpoint/load_report.upb.c
+  src/core/ext/upb-generated/envoy/service/discovery/v2/ads.upb.c
+  src/core/ext/upb-generated/envoy/service/load_stats/v2/lrs.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/core/address.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/core/base.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/core/config_source.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/core/grpc_service.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/core/health_check.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/core/protocol.upb.c
+  src/core/ext/upb-generated/envoy/type/percent.upb.c
+  src/core/ext/upb-generated/envoy/type/range.upb.c
+  src/core/ext/upb-generated/gogoproto/gogo.upb.c
+  src/core/ext/upb-generated/validate/validate.upb.c
   src/core/ext/filters/client_channel/lb_policy/pick_first/pick_first.cc
   src/core/ext/filters/client_channel/lb_policy/round_robin/round_robin.cc
   src/core/ext/filters/client_channel/resolver/dns/c_ares/dns_resolver_ares.cc
   src/core/ext/filters/client_channel/resolver/dns/c_ares/grpc_ares_ev_driver.cc
+  src/core/ext/filters/client_channel/resolver/dns/c_ares/grpc_ares_ev_driver_libuv.cc
   src/core/ext/filters/client_channel/resolver/dns/c_ares/grpc_ares_ev_driver_posix.cc
   src/core/ext/filters/client_channel/resolver/dns/c_ares/grpc_ares_ev_driver_windows.cc
   src/core/ext/filters/client_channel/resolver/dns/c_ares/grpc_ares_wrapper.cc
   src/core/ext/filters/client_channel/resolver/dns/c_ares/grpc_ares_wrapper_fallback.cc
+  src/core/ext/filters/client_channel/resolver/dns/c_ares/grpc_ares_wrapper_libuv.cc
   src/core/ext/filters/client_channel/resolver/dns/c_ares/grpc_ares_wrapper_posix.cc
   src/core/ext/filters/client_channel/resolver/dns/c_ares/grpc_ares_wrapper_windows.cc
+  src/core/ext/filters/client_channel/resolver/dns/dns_resolver_selection.cc
   src/core/ext/filters/client_channel/resolver/dns/native/dns_resolver.cc
   src/core/ext/filters/client_channel/resolver/sockaddr/sockaddr_resolver.cc
   src/core/ext/filters/census/grpc_context.cc
+  src/core/ext/filters/client_idle/client_idle_filter.cc
   src/core/ext/filters/max_age/max_age_filter.cc
   src/core/ext/filters/message_size/message_size_filter.cc
   src/core/ext/filters/http/client_authority_filter.cc
@@ -1295,14 +1398,17 @@ endif()
 target_include_directories(grpc
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
   # avoid dependency on libstdc++
   if (_gRPC_CORE_NOSTDCXX_FLAGS)
@@ -1319,6 +1425,9 @@ target_link_libraries(grpc
   ${_gRPC_ALLTARGETS_LIBRARIES}
   gpr
 )
+if (_gRPC_PLATFORM_IOS OR _gRPC_PLATFORM_MAC)
+  target_link_libraries(grpc "-framework CoreFoundation")
+endif()
 
 foreach(_hdr
   include/grpc/impl/codegen/byte_buffer.h
@@ -1376,6 +1485,7 @@ endif()
 
 
 add_library(grpc_cronet
+  src/core/ext/transport/cronet/plugin_registry/grpc_cronet_plugin_registry.cc
   src/core/lib/surface/init.cc
   src/core/lib/avl/avl.cc
   src/core/lib/backoff/backoff.cc
@@ -1387,10 +1497,10 @@ add_library(grpc_cronet
   src/core/lib/channel/channelz_registry.cc
   src/core/lib/channel/connected_channel.cc
   src/core/lib/channel/handshaker.cc
-  src/core/lib/channel/handshaker_factory.cc
   src/core/lib/channel/handshaker_registry.cc
   src/core/lib/channel/status_util.cc
   src/core/lib/compression/compression.cc
+  src/core/lib/compression/compression_args.cc
   src/core/lib/compression/compression_internal.cc
   src/core/lib/compression/message_compress.cc
   src/core/lib/compression/stream_compression.cc
@@ -1403,12 +1513,15 @@ add_library(grpc_cronet
   src/core/lib/http/parser.cc
   src/core/lib/iomgr/buffer_list.cc
   src/core/lib/iomgr/call_combiner.cc
+  src/core/lib/iomgr/cfstream_handle.cc
   src/core/lib/iomgr/combiner.cc
   src/core/lib/iomgr/endpoint.cc
+  src/core/lib/iomgr/endpoint_cfstream.cc
   src/core/lib/iomgr/endpoint_pair_posix.cc
   src/core/lib/iomgr/endpoint_pair_uv.cc
   src/core/lib/iomgr/endpoint_pair_windows.cc
   src/core/lib/iomgr/error.cc
+  src/core/lib/iomgr/error_cfstream.cc
   src/core/lib/iomgr/ev_epoll1_linux.cc
   src/core/lib/iomgr/ev_epollex_linux.cc
   src/core/lib/iomgr/ev_poll_posix.cc
@@ -1416,6 +1529,8 @@ add_library(grpc_cronet
   src/core/lib/iomgr/ev_windows.cc
   src/core/lib/iomgr/exec_ctx.cc
   src/core/lib/iomgr/executor.cc
+  src/core/lib/iomgr/executor/mpmcqueue.cc
+  src/core/lib/iomgr/executor/threadpool.cc
   src/core/lib/iomgr/fork_posix.cc
   src/core/lib/iomgr/fork_windows.cc
   src/core/lib/iomgr/gethostname_fallback.cc
@@ -1429,6 +1544,7 @@ add_library(grpc_cronet
   src/core/lib/iomgr/iomgr_custom.cc
   src/core/lib/iomgr/iomgr_internal.cc
   src/core/lib/iomgr/iomgr_posix.cc
+  src/core/lib/iomgr/iomgr_posix_cfstream.cc
   src/core/lib/iomgr/iomgr_uv.cc
   src/core/lib/iomgr/iomgr_windows.cc
   src/core/lib/iomgr/is_epollexclusive_available.cc
@@ -1457,6 +1573,7 @@ add_library(grpc_cronet
   src/core/lib/iomgr/socket_utils_windows.cc
   src/core/lib/iomgr/socket_windows.cc
   src/core/lib/iomgr/tcp_client.cc
+  src/core/lib/iomgr/tcp_client_cfstream.cc
   src/core/lib/iomgr/tcp_client_custom.cc
   src/core/lib/iomgr/tcp_client_posix.cc
   src/core/lib/iomgr/tcp_client_windows.cc
@@ -1481,7 +1598,6 @@ add_library(grpc_cronet
   src/core/lib/iomgr/udp_server.cc
   src/core/lib/iomgr/unix_sockets_posix.cc
   src/core/lib/iomgr/unix_sockets_posix_noop.cc
-  src/core/lib/iomgr/wakeup_fd_cv.cc
   src/core/lib/iomgr/wakeup_fd_eventfd.cc
   src/core/lib/iomgr/wakeup_fd_nospecial.cc
   src/core/lib/iomgr/wakeup_fd_pipe.cc
@@ -1521,7 +1637,6 @@ add_library(grpc_cronet
   src/core/lib/transport/metadata.cc
   src/core/lib/transport/metadata_batch.cc
   src/core/lib/transport/pid_controller.cc
-  src/core/lib/transport/service_config.cc
   src/core/lib/transport/static_metadata.cc
   src/core/lib/transport/status_conversion.cc
   src/core/lib/transport/status_metadata.cc
@@ -1579,19 +1694,23 @@ add_library(grpc_cronet
   src/core/ext/filters/client_channel/parse_address.cc
   src/core/ext/filters/client_channel/proxy_mapper.cc
   src/core/ext/filters/client_channel/proxy_mapper_registry.cc
-  src/core/ext/filters/client_channel/request_routing.cc
   src/core/ext/filters/client_channel/resolver.cc
   src/core/ext/filters/client_channel/resolver_registry.cc
   src/core/ext/filters/client_channel/resolver_result_parsing.cc
+  src/core/ext/filters/client_channel/resolving_lb_policy.cc
   src/core/ext/filters/client_channel/retry_throttle.cc
   src/core/ext/filters/client_channel/server_address.cc
+  src/core/ext/filters/client_channel/service_config.cc
   src/core/ext/filters/client_channel/subchannel.cc
   src/core/ext/filters/client_channel/subchannel_pool_interface.cc
   src/core/ext/filters/deadline/deadline_filter.cc
-  src/core/ext/filters/client_channel/health/health.pb.c
-  third_party/nanopb/pb_common.c
-  third_party/nanopb/pb_decode.c
-  third_party/nanopb/pb_encode.c
+  src/core/ext/upb-generated/src/proto/grpc/health/v1/health.upb.c
+  third_party/upb/upb/decode.c
+  third_party/upb/upb/encode.c
+  third_party/upb/upb/msg.c
+  third_party/upb/upb/port.c
+  third_party/upb/upb/table.c
+  third_party/upb/upb/upb.c
   src/core/lib/http/httpcli_security_connector.cc
   src/core/lib/security/context/security_context.cc
   src/core/lib/security/credentials/alts/alts_credentials.cc
@@ -1609,6 +1728,8 @@ add_library(grpc_cronet
   src/core/lib/security/credentials/oauth2/oauth2_credentials.cc
   src/core/lib/security/credentials/plugin/plugin_credentials.cc
   src/core/lib/security/credentials/ssl/ssl_credentials.cc
+  src/core/lib/security/credentials/tls/grpc_tls_credentials_options.cc
+  src/core/lib/security/credentials/tls/spiffe_credentials.cc
   src/core/lib/security/security_connector/alts/alts_security_connector.cc
   src/core/lib/security/security_connector/fake/fake_security_connector.cc
   src/core/lib/security/security_connector/load_system_roots_fallback.cc
@@ -1617,6 +1738,7 @@ add_library(grpc_cronet
   src/core/lib/security/security_connector/security_connector.cc
   src/core/lib/security/security_connector/ssl/ssl_security_connector.cc
   src/core/lib/security/security_connector/ssl_utils.cc
+  src/core/lib/security/security_connector/tls/spiffe_security_connector.cc
   src/core/lib/security/transport/client_auth_filter.cc
   src/core/lib/security/transport/secure_endpoint.cc
   src/core/lib/security/transport/security_handshaker.cc
@@ -1656,6 +1778,9 @@ add_library(grpc_cronet
   src/core/tsi/alts/handshaker/altscontext.pb.c
   src/core/tsi/alts/handshaker/handshaker.pb.c
   src/core/tsi/alts/handshaker/transport_security_common.pb.c
+  third_party/nanopb/pb_common.c
+  third_party/nanopb/pb_decode.c
+  third_party/nanopb/pb_encode.c
   src/core/tsi/transport_security.cc
   src/core/ext/transport/chttp2/client/insecure/channel_create.cc
   src/core/ext/transport/chttp2/client/insecure/channel_create_posix.cc
@@ -1668,7 +1793,6 @@ add_library(grpc_cronet
   src/core/tsi/ssl/session_cache/ssl_session_openssl.cc
   src/core/tsi/ssl_transport_security.cc
   src/core/tsi/transport_security_grpc.cc
-  src/core/plugin_registry/grpc_cronet_plugin_registry.cc
 )
 
 if(WIN32 AND MSVC)
@@ -1686,14 +1810,17 @@ endif()
 target_include_directories(grpc_cronet
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
   # avoid dependency on libstdc++
   if (_gRPC_CORE_NOSTDCXX_FLAGS)
@@ -1710,6 +1837,9 @@ target_link_libraries(grpc_cronet
   ${_gRPC_ALLTARGETS_LIBRARIES}
   gpr
 )
+if (_gRPC_PLATFORM_IOS OR _gRPC_PLATFORM_MAC)
+  target_link_libraries(grpc_cronet "-framework CoreFoundation")
+endif()
 
 foreach(_hdr
   include/grpc/impl/codegen/byte_buffer.h
@@ -1797,10 +1927,10 @@ add_library(grpc_test_util
   src/core/lib/channel/channelz_registry.cc
   src/core/lib/channel/connected_channel.cc
   src/core/lib/channel/handshaker.cc
-  src/core/lib/channel/handshaker_factory.cc
   src/core/lib/channel/handshaker_registry.cc
   src/core/lib/channel/status_util.cc
   src/core/lib/compression/compression.cc
+  src/core/lib/compression/compression_args.cc
   src/core/lib/compression/compression_internal.cc
   src/core/lib/compression/message_compress.cc
   src/core/lib/compression/stream_compression.cc
@@ -1813,12 +1943,15 @@ add_library(grpc_test_util
   src/core/lib/http/parser.cc
   src/core/lib/iomgr/buffer_list.cc
   src/core/lib/iomgr/call_combiner.cc
+  src/core/lib/iomgr/cfstream_handle.cc
   src/core/lib/iomgr/combiner.cc
   src/core/lib/iomgr/endpoint.cc
+  src/core/lib/iomgr/endpoint_cfstream.cc
   src/core/lib/iomgr/endpoint_pair_posix.cc
   src/core/lib/iomgr/endpoint_pair_uv.cc
   src/core/lib/iomgr/endpoint_pair_windows.cc
   src/core/lib/iomgr/error.cc
+  src/core/lib/iomgr/error_cfstream.cc
   src/core/lib/iomgr/ev_epoll1_linux.cc
   src/core/lib/iomgr/ev_epollex_linux.cc
   src/core/lib/iomgr/ev_poll_posix.cc
@@ -1826,6 +1959,8 @@ add_library(grpc_test_util
   src/core/lib/iomgr/ev_windows.cc
   src/core/lib/iomgr/exec_ctx.cc
   src/core/lib/iomgr/executor.cc
+  src/core/lib/iomgr/executor/mpmcqueue.cc
+  src/core/lib/iomgr/executor/threadpool.cc
   src/core/lib/iomgr/fork_posix.cc
   src/core/lib/iomgr/fork_windows.cc
   src/core/lib/iomgr/gethostname_fallback.cc
@@ -1839,6 +1974,7 @@ add_library(grpc_test_util
   src/core/lib/iomgr/iomgr_custom.cc
   src/core/lib/iomgr/iomgr_internal.cc
   src/core/lib/iomgr/iomgr_posix.cc
+  src/core/lib/iomgr/iomgr_posix_cfstream.cc
   src/core/lib/iomgr/iomgr_uv.cc
   src/core/lib/iomgr/iomgr_windows.cc
   src/core/lib/iomgr/is_epollexclusive_available.cc
@@ -1867,6 +2003,7 @@ add_library(grpc_test_util
   src/core/lib/iomgr/socket_utils_windows.cc
   src/core/lib/iomgr/socket_windows.cc
   src/core/lib/iomgr/tcp_client.cc
+  src/core/lib/iomgr/tcp_client_cfstream.cc
   src/core/lib/iomgr/tcp_client_custom.cc
   src/core/lib/iomgr/tcp_client_posix.cc
   src/core/lib/iomgr/tcp_client_windows.cc
@@ -1891,7 +2028,6 @@ add_library(grpc_test_util
   src/core/lib/iomgr/udp_server.cc
   src/core/lib/iomgr/unix_sockets_posix.cc
   src/core/lib/iomgr/unix_sockets_posix_noop.cc
-  src/core/lib/iomgr/wakeup_fd_cv.cc
   src/core/lib/iomgr/wakeup_fd_eventfd.cc
   src/core/lib/iomgr/wakeup_fd_nospecial.cc
   src/core/lib/iomgr/wakeup_fd_pipe.cc
@@ -1931,7 +2067,6 @@ add_library(grpc_test_util
   src/core/lib/transport/metadata.cc
   src/core/lib/transport/metadata_batch.cc
   src/core/lib/transport/pid_controller.cc
-  src/core/lib/transport/service_config.cc
   src/core/lib/transport/static_metadata.cc
   src/core/lib/transport/status_conversion.cc
   src/core/lib/transport/status_metadata.cc
@@ -1957,19 +2092,23 @@ add_library(grpc_test_util
   src/core/ext/filters/client_channel/parse_address.cc
   src/core/ext/filters/client_channel/proxy_mapper.cc
   src/core/ext/filters/client_channel/proxy_mapper_registry.cc
-  src/core/ext/filters/client_channel/request_routing.cc
   src/core/ext/filters/client_channel/resolver.cc
   src/core/ext/filters/client_channel/resolver_registry.cc
   src/core/ext/filters/client_channel/resolver_result_parsing.cc
+  src/core/ext/filters/client_channel/resolving_lb_policy.cc
   src/core/ext/filters/client_channel/retry_throttle.cc
   src/core/ext/filters/client_channel/server_address.cc
+  src/core/ext/filters/client_channel/service_config.cc
   src/core/ext/filters/client_channel/subchannel.cc
   src/core/ext/filters/client_channel/subchannel_pool_interface.cc
   src/core/ext/filters/deadline/deadline_filter.cc
-  src/core/ext/filters/client_channel/health/health.pb.c
-  third_party/nanopb/pb_common.c
-  third_party/nanopb/pb_decode.c
-  third_party/nanopb/pb_encode.c
+  src/core/ext/upb-generated/src/proto/grpc/health/v1/health.upb.c
+  third_party/upb/upb/decode.c
+  third_party/upb/upb/encode.c
+  third_party/upb/upb/msg.c
+  third_party/upb/upb/port.c
+  third_party/upb/upb/table.c
+  third_party/upb/upb/upb.c
   src/core/ext/transport/chttp2/transport/bin_decoder.cc
   src/core/ext/transport/chttp2/transport/bin_encoder.cc
   src/core/ext/transport/chttp2/transport/chttp2_plugin.cc
@@ -2015,14 +2154,17 @@ endif()
 target_include_directories(grpc_test_util
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
   # avoid dependency on libstdc++
   if (_gRPC_CORE_NOSTDCXX_FLAGS)
@@ -2035,6 +2177,9 @@ target_link_libraries(grpc_test_util
   gpr
   grpc
 )
+if (_gRPC_PLATFORM_IOS OR _gRPC_PLATFORM_MAC)
+  target_link_libraries(grpc_test_util "-framework CoreFoundation")
+endif()
 
 foreach(_hdr
   include/grpc/support/alloc.h
@@ -2123,10 +2268,10 @@ add_library(grpc_test_util_unsecure
   src/core/lib/channel/channelz_registry.cc
   src/core/lib/channel/connected_channel.cc
   src/core/lib/channel/handshaker.cc
-  src/core/lib/channel/handshaker_factory.cc
   src/core/lib/channel/handshaker_registry.cc
   src/core/lib/channel/status_util.cc
   src/core/lib/compression/compression.cc
+  src/core/lib/compression/compression_args.cc
   src/core/lib/compression/compression_internal.cc
   src/core/lib/compression/message_compress.cc
   src/core/lib/compression/stream_compression.cc
@@ -2139,12 +2284,15 @@ add_library(grpc_test_util_unsecure
   src/core/lib/http/parser.cc
   src/core/lib/iomgr/buffer_list.cc
   src/core/lib/iomgr/call_combiner.cc
+  src/core/lib/iomgr/cfstream_handle.cc
   src/core/lib/iomgr/combiner.cc
   src/core/lib/iomgr/endpoint.cc
+  src/core/lib/iomgr/endpoint_cfstream.cc
   src/core/lib/iomgr/endpoint_pair_posix.cc
   src/core/lib/iomgr/endpoint_pair_uv.cc
   src/core/lib/iomgr/endpoint_pair_windows.cc
   src/core/lib/iomgr/error.cc
+  src/core/lib/iomgr/error_cfstream.cc
   src/core/lib/iomgr/ev_epoll1_linux.cc
   src/core/lib/iomgr/ev_epollex_linux.cc
   src/core/lib/iomgr/ev_poll_posix.cc
@@ -2152,6 +2300,8 @@ add_library(grpc_test_util_unsecure
   src/core/lib/iomgr/ev_windows.cc
   src/core/lib/iomgr/exec_ctx.cc
   src/core/lib/iomgr/executor.cc
+  src/core/lib/iomgr/executor/mpmcqueue.cc
+  src/core/lib/iomgr/executor/threadpool.cc
   src/core/lib/iomgr/fork_posix.cc
   src/core/lib/iomgr/fork_windows.cc
   src/core/lib/iomgr/gethostname_fallback.cc
@@ -2165,6 +2315,7 @@ add_library(grpc_test_util_unsecure
   src/core/lib/iomgr/iomgr_custom.cc
   src/core/lib/iomgr/iomgr_internal.cc
   src/core/lib/iomgr/iomgr_posix.cc
+  src/core/lib/iomgr/iomgr_posix_cfstream.cc
   src/core/lib/iomgr/iomgr_uv.cc
   src/core/lib/iomgr/iomgr_windows.cc
   src/core/lib/iomgr/is_epollexclusive_available.cc
@@ -2193,6 +2344,7 @@ add_library(grpc_test_util_unsecure
   src/core/lib/iomgr/socket_utils_windows.cc
   src/core/lib/iomgr/socket_windows.cc
   src/core/lib/iomgr/tcp_client.cc
+  src/core/lib/iomgr/tcp_client_cfstream.cc
   src/core/lib/iomgr/tcp_client_custom.cc
   src/core/lib/iomgr/tcp_client_posix.cc
   src/core/lib/iomgr/tcp_client_windows.cc
@@ -2217,7 +2369,6 @@ add_library(grpc_test_util_unsecure
   src/core/lib/iomgr/udp_server.cc
   src/core/lib/iomgr/unix_sockets_posix.cc
   src/core/lib/iomgr/unix_sockets_posix_noop.cc
-  src/core/lib/iomgr/wakeup_fd_cv.cc
   src/core/lib/iomgr/wakeup_fd_eventfd.cc
   src/core/lib/iomgr/wakeup_fd_nospecial.cc
   src/core/lib/iomgr/wakeup_fd_pipe.cc
@@ -2257,7 +2408,6 @@ add_library(grpc_test_util_unsecure
   src/core/lib/transport/metadata.cc
   src/core/lib/transport/metadata_batch.cc
   src/core/lib/transport/pid_controller.cc
-  src/core/lib/transport/service_config.cc
   src/core/lib/transport/static_metadata.cc
   src/core/lib/transport/status_conversion.cc
   src/core/lib/transport/status_metadata.cc
@@ -2283,19 +2433,23 @@ add_library(grpc_test_util_unsecure
   src/core/ext/filters/client_channel/parse_address.cc
   src/core/ext/filters/client_channel/proxy_mapper.cc
   src/core/ext/filters/client_channel/proxy_mapper_registry.cc
-  src/core/ext/filters/client_channel/request_routing.cc
   src/core/ext/filters/client_channel/resolver.cc
   src/core/ext/filters/client_channel/resolver_registry.cc
   src/core/ext/filters/client_channel/resolver_result_parsing.cc
+  src/core/ext/filters/client_channel/resolving_lb_policy.cc
   src/core/ext/filters/client_channel/retry_throttle.cc
   src/core/ext/filters/client_channel/server_address.cc
+  src/core/ext/filters/client_channel/service_config.cc
   src/core/ext/filters/client_channel/subchannel.cc
   src/core/ext/filters/client_channel/subchannel_pool_interface.cc
   src/core/ext/filters/deadline/deadline_filter.cc
-  src/core/ext/filters/client_channel/health/health.pb.c
-  third_party/nanopb/pb_common.c
-  third_party/nanopb/pb_decode.c
-  third_party/nanopb/pb_encode.c
+  src/core/ext/upb-generated/src/proto/grpc/health/v1/health.upb.c
+  third_party/upb/upb/decode.c
+  third_party/upb/upb/encode.c
+  third_party/upb/upb/msg.c
+  third_party/upb/upb/port.c
+  third_party/upb/upb/table.c
+  third_party/upb/upb/upb.c
   src/core/ext/transport/chttp2/transport/bin_decoder.cc
   src/core/ext/transport/chttp2/transport/bin_encoder.cc
   src/core/ext/transport/chttp2/transport/chttp2_plugin.cc
@@ -2341,14 +2495,17 @@ endif()
 target_include_directories(grpc_test_util_unsecure
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
   # avoid dependency on libstdc++
   if (_gRPC_CORE_NOSTDCXX_FLAGS)
@@ -2361,6 +2518,9 @@ target_link_libraries(grpc_test_util_unsecure
   gpr
   grpc_unsecure
 )
+if (_gRPC_PLATFORM_IOS OR _gRPC_PLATFORM_MAC)
+  target_link_libraries(grpc_test_util_unsecure "-framework CoreFoundation")
+endif()
 
 foreach(_hdr
   include/grpc/support/alloc.h
@@ -2425,10 +2585,10 @@ add_library(grpc_unsecure
   src/core/lib/channel/channelz_registry.cc
   src/core/lib/channel/connected_channel.cc
   src/core/lib/channel/handshaker.cc
-  src/core/lib/channel/handshaker_factory.cc
   src/core/lib/channel/handshaker_registry.cc
   src/core/lib/channel/status_util.cc
   src/core/lib/compression/compression.cc
+  src/core/lib/compression/compression_args.cc
   src/core/lib/compression/compression_internal.cc
   src/core/lib/compression/message_compress.cc
   src/core/lib/compression/stream_compression.cc
@@ -2441,12 +2601,15 @@ add_library(grpc_unsecure
   src/core/lib/http/parser.cc
   src/core/lib/iomgr/buffer_list.cc
   src/core/lib/iomgr/call_combiner.cc
+  src/core/lib/iomgr/cfstream_handle.cc
   src/core/lib/iomgr/combiner.cc
   src/core/lib/iomgr/endpoint.cc
+  src/core/lib/iomgr/endpoint_cfstream.cc
   src/core/lib/iomgr/endpoint_pair_posix.cc
   src/core/lib/iomgr/endpoint_pair_uv.cc
   src/core/lib/iomgr/endpoint_pair_windows.cc
   src/core/lib/iomgr/error.cc
+  src/core/lib/iomgr/error_cfstream.cc
   src/core/lib/iomgr/ev_epoll1_linux.cc
   src/core/lib/iomgr/ev_epollex_linux.cc
   src/core/lib/iomgr/ev_poll_posix.cc
@@ -2454,6 +2617,8 @@ add_library(grpc_unsecure
   src/core/lib/iomgr/ev_windows.cc
   src/core/lib/iomgr/exec_ctx.cc
   src/core/lib/iomgr/executor.cc
+  src/core/lib/iomgr/executor/mpmcqueue.cc
+  src/core/lib/iomgr/executor/threadpool.cc
   src/core/lib/iomgr/fork_posix.cc
   src/core/lib/iomgr/fork_windows.cc
   src/core/lib/iomgr/gethostname_fallback.cc
@@ -2467,6 +2632,7 @@ add_library(grpc_unsecure
   src/core/lib/iomgr/iomgr_custom.cc
   src/core/lib/iomgr/iomgr_internal.cc
   src/core/lib/iomgr/iomgr_posix.cc
+  src/core/lib/iomgr/iomgr_posix_cfstream.cc
   src/core/lib/iomgr/iomgr_uv.cc
   src/core/lib/iomgr/iomgr_windows.cc
   src/core/lib/iomgr/is_epollexclusive_available.cc
@@ -2495,6 +2661,7 @@ add_library(grpc_unsecure
   src/core/lib/iomgr/socket_utils_windows.cc
   src/core/lib/iomgr/socket_windows.cc
   src/core/lib/iomgr/tcp_client.cc
+  src/core/lib/iomgr/tcp_client_cfstream.cc
   src/core/lib/iomgr/tcp_client_custom.cc
   src/core/lib/iomgr/tcp_client_posix.cc
   src/core/lib/iomgr/tcp_client_windows.cc
@@ -2519,7 +2686,6 @@ add_library(grpc_unsecure
   src/core/lib/iomgr/udp_server.cc
   src/core/lib/iomgr/unix_sockets_posix.cc
   src/core/lib/iomgr/unix_sockets_posix_noop.cc
-  src/core/lib/iomgr/wakeup_fd_cv.cc
   src/core/lib/iomgr/wakeup_fd_eventfd.cc
   src/core/lib/iomgr/wakeup_fd_nospecial.cc
   src/core/lib/iomgr/wakeup_fd_pipe.cc
@@ -2559,7 +2725,6 @@ add_library(grpc_unsecure
   src/core/lib/transport/metadata.cc
   src/core/lib/transport/metadata_batch.cc
   src/core/lib/transport/pid_controller.cc
-  src/core/lib/transport/service_config.cc
   src/core/lib/transport/static_metadata.cc
   src/core/lib/transport/status_conversion.cc
   src/core/lib/transport/status_metadata.cc
@@ -2620,29 +2785,36 @@ add_library(grpc_unsecure
   src/core/ext/filters/client_channel/parse_address.cc
   src/core/ext/filters/client_channel/proxy_mapper.cc
   src/core/ext/filters/client_channel/proxy_mapper_registry.cc
-  src/core/ext/filters/client_channel/request_routing.cc
   src/core/ext/filters/client_channel/resolver.cc
   src/core/ext/filters/client_channel/resolver_registry.cc
   src/core/ext/filters/client_channel/resolver_result_parsing.cc
+  src/core/ext/filters/client_channel/resolving_lb_policy.cc
   src/core/ext/filters/client_channel/retry_throttle.cc
   src/core/ext/filters/client_channel/server_address.cc
+  src/core/ext/filters/client_channel/service_config.cc
   src/core/ext/filters/client_channel/subchannel.cc
   src/core/ext/filters/client_channel/subchannel_pool_interface.cc
   src/core/ext/filters/deadline/deadline_filter.cc
-  src/core/ext/filters/client_channel/health/health.pb.c
-  third_party/nanopb/pb_common.c
-  third_party/nanopb/pb_decode.c
-  third_party/nanopb/pb_encode.c
+  src/core/ext/upb-generated/src/proto/grpc/health/v1/health.upb.c
+  third_party/upb/upb/decode.c
+  third_party/upb/upb/encode.c
+  third_party/upb/upb/msg.c
+  third_party/upb/upb/port.c
+  third_party/upb/upb/table.c
+  third_party/upb/upb/upb.c
   src/core/ext/transport/inproc/inproc_plugin.cc
   src/core/ext/transport/inproc/inproc_transport.cc
   src/core/ext/filters/client_channel/resolver/dns/c_ares/dns_resolver_ares.cc
   src/core/ext/filters/client_channel/resolver/dns/c_ares/grpc_ares_ev_driver.cc
+  src/core/ext/filters/client_channel/resolver/dns/c_ares/grpc_ares_ev_driver_libuv.cc
   src/core/ext/filters/client_channel/resolver/dns/c_ares/grpc_ares_ev_driver_posix.cc
   src/core/ext/filters/client_channel/resolver/dns/c_ares/grpc_ares_ev_driver_windows.cc
   src/core/ext/filters/client_channel/resolver/dns/c_ares/grpc_ares_wrapper.cc
   src/core/ext/filters/client_channel/resolver/dns/c_ares/grpc_ares_wrapper_fallback.cc
+  src/core/ext/filters/client_channel/resolver/dns/c_ares/grpc_ares_wrapper_libuv.cc
   src/core/ext/filters/client_channel/resolver/dns/c_ares/grpc_ares_wrapper_posix.cc
   src/core/ext/filters/client_channel/resolver/dns/c_ares/grpc_ares_wrapper_windows.cc
+  src/core/ext/filters/client_channel/resolver/dns/dns_resolver_selection.cc
   src/core/ext/filters/client_channel/resolver/dns/native/dns_resolver.cc
   src/core/ext/filters/client_channel/resolver/sockaddr/sockaddr_resolver.cc
   src/core/ext/filters/client_channel/resolver/fake/fake_resolver.cc
@@ -2651,16 +2823,45 @@ add_library(grpc_unsecure
   src/core/ext/filters/client_channel/lb_policy/grpclb/grpclb_channel.cc
   src/core/ext/filters/client_channel/lb_policy/grpclb/grpclb_client_stats.cc
   src/core/ext/filters/client_channel/lb_policy/grpclb/load_balancer_api.cc
-  src/core/ext/filters/client_channel/lb_policy/grpclb/proto/grpc/lb/v1/google/protobuf/duration.pb.c
-  src/core/ext/filters/client_channel/lb_policy/grpclb/proto/grpc/lb/v1/google/protobuf/timestamp.pb.c
-  src/core/ext/filters/client_channel/lb_policy/grpclb/proto/grpc/lb/v1/load_balancer.pb.c
+  src/core/ext/upb-generated/src/proto/grpc/lb/v1/load_balancer.upb.c
+  src/core/ext/upb-generated/google/api/annotations.upb.c
+  src/core/ext/upb-generated/google/api/http.upb.c
+  src/core/ext/upb-generated/google/protobuf/any.upb.c
+  src/core/ext/upb-generated/google/protobuf/descriptor.upb.c
+  src/core/ext/upb-generated/google/protobuf/duration.upb.c
+  src/core/ext/upb-generated/google/protobuf/empty.upb.c
+  src/core/ext/upb-generated/google/protobuf/struct.upb.c
+  src/core/ext/upb-generated/google/protobuf/timestamp.upb.c
+  src/core/ext/upb-generated/google/protobuf/wrappers.upb.c
+  src/core/ext/upb-generated/google/rpc/status.upb.c
   src/core/ext/filters/client_channel/lb_policy/xds/xds.cc
   src/core/ext/filters/client_channel/lb_policy/xds/xds_channel.cc
   src/core/ext/filters/client_channel/lb_policy/xds/xds_client_stats.cc
   src/core/ext/filters/client_channel/lb_policy/xds/xds_load_balancer_api.cc
+  src/core/ext/upb-generated/envoy/api/v2/auth/cert.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/cds.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/cluster/circuit_breaker.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/cluster/outlier_detection.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/discovery.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/eds.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/endpoint/endpoint.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/endpoint/load_report.upb.c
+  src/core/ext/upb-generated/envoy/service/discovery/v2/ads.upb.c
+  src/core/ext/upb-generated/envoy/service/load_stats/v2/lrs.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/core/address.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/core/base.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/core/config_source.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/core/grpc_service.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/core/health_check.upb.c
+  src/core/ext/upb-generated/envoy/api/v2/core/protocol.upb.c
+  src/core/ext/upb-generated/envoy/type/percent.upb.c
+  src/core/ext/upb-generated/envoy/type/range.upb.c
+  src/core/ext/upb-generated/gogoproto/gogo.upb.c
+  src/core/ext/upb-generated/validate/validate.upb.c
   src/core/ext/filters/client_channel/lb_policy/pick_first/pick_first.cc
   src/core/ext/filters/client_channel/lb_policy/round_robin/round_robin.cc
   src/core/ext/filters/census/grpc_context.cc
+  src/core/ext/filters/client_idle/client_idle_filter.cc
   src/core/ext/filters/max_age/max_age_filter.cc
   src/core/ext/filters/message_size/message_size_filter.cc
   src/core/ext/filters/http/client_authority_filter.cc
@@ -2684,14 +2885,17 @@ endif()
 target_include_directories(grpc_unsecure
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
   # avoid dependency on libstdc++
   if (_gRPC_CORE_NOSTDCXX_FLAGS)
@@ -2707,6 +2911,9 @@ target_link_libraries(grpc_unsecure
   ${_gRPC_ALLTARGETS_LIBRARIES}
   gpr
 )
+if (_gRPC_PLATFORM_IOS OR _gRPC_PLATFORM_MAC)
+  target_link_libraries(grpc_unsecure "-framework CoreFoundation")
+endif()
 
 foreach(_hdr
   include/grpc/impl/codegen/byte_buffer.h
@@ -2782,14 +2989,17 @@ endif()
 target_include_directories(reconnect_server
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
   # avoid dependency on libstdc++
   if (_gRPC_CORE_NOSTDCXX_FLAGS)
@@ -2828,14 +3038,17 @@ endif()
 target_include_directories(test_tcp_server
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
   # avoid dependency on libstdc++
   if (_gRPC_CORE_NOSTDCXX_FLAGS)
@@ -2848,6 +3061,116 @@ target_link_libraries(test_tcp_server
   grpc_test_util
   grpc
   gpr
+)
+
+
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
+if (gRPC_BUILD_CODEGEN)
+add_library(bm_callback_test_service_impl
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/testing/echo.pb.cc
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/testing/echo.grpc.pb.cc
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/testing/echo.pb.h
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/testing/echo.grpc.pb.h
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/testing/echo_mock.grpc.pb.h
+  test/cpp/microbenchmarks/callback_test_service.cc
+)
+
+if(WIN32 AND MSVC)
+  set_target_properties(bm_callback_test_service_impl PROPERTIES COMPILE_PDB_NAME "bm_callback_test_service_impl"
+    COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+  )
+  if (gRPC_INSTALL)
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/bm_callback_test_service_impl.pdb
+      DESTINATION ${gRPC_INSTALL_LIBDIR} OPTIONAL
+    )
+  endif()
+endif()
+
+protobuf_generate_grpc_cpp(
+  src/proto/grpc/testing/echo.proto
+)
+
+target_include_directories(bm_callback_test_service_impl
+  PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+target_link_libraries(bm_callback_test_service_impl
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc_benchmark
+  ${_gRPC_BENCHMARK_LIBRARIES}
+  grpc++_test_util_unsecure
+  grpc_test_util_unsecure
+  grpc++_unsecure
+  grpc_unsecure
+  gpr
+  grpc++_test_config
+  ${_gRPC_GFLAGS_LIBRARIES}
+)
+
+endif (gRPC_BUILD_CODEGEN)
+
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
+add_library(dns_test_util
+  test/cpp/naming/dns_test_util.cc
+)
+
+if(WIN32 AND MSVC)
+  set_target_properties(dns_test_util PROPERTIES COMPILE_PDB_NAME "dns_test_util"
+    COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+  )
+  if (gRPC_INSTALL)
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/dns_test_util.pdb
+      DESTINATION ${gRPC_INSTALL_LIBDIR} OPTIONAL
+    )
+  endif()
+endif()
+
+
+target_include_directories(dns_test_util
+  PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+target_link_libraries(dns_test_util
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
 
@@ -2877,11 +3200,13 @@ add_library(grpc++
   src/cpp/common/core_codegen.cc
   src/cpp/common/resource_quota_cc.cc
   src/cpp/common/rpc_method.cc
+  src/cpp/common/validate_service_config.cc
   src/cpp/common/version_cc.cc
   src/cpp/server/async_generic_service.cc
   src/cpp/server/channel_argument_option.cc
   src/cpp/server/create_default_thread_pool.cc
   src/cpp/server/dynamic_thread_pool.cc
+  src/cpp/server/external_connection_acceptor_impl.cc
   src/cpp/server/health/default_health_check_service.cc
   src/cpp/server/health/health_check_service.cc
   src/cpp/server/health/health_check_service_server_builder_option.cc
@@ -2895,10 +3220,13 @@ add_library(grpc++
   src/cpp/util/status.cc
   src/cpp/util/string_ref.cc
   src/cpp/util/time_cc.cc
-  src/core/ext/filters/client_channel/health/health.pb.c
-  third_party/nanopb/pb_common.c
-  third_party/nanopb/pb_decode.c
-  third_party/nanopb/pb_encode.c
+  src/core/ext/upb-generated/src/proto/grpc/health/v1/health.upb.c
+  third_party/upb/upb/decode.c
+  third_party/upb/upb/encode.c
+  third_party/upb/upb/msg.c
+  third_party/upb/upb/port.c
+  third_party/upb/upb/table.c
+  third_party/upb/upb/upb.c
   src/cpp/codegen/codegen_init.cc
 )
 
@@ -2917,14 +3245,17 @@ endif()
 target_include_directories(grpc++
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 target_link_libraries(grpc++
@@ -2985,15 +3316,21 @@ foreach(_hdr
   include/grpcpp/alarm.h
   include/grpcpp/alarm_impl.h
   include/grpcpp/channel.h
+  include/grpcpp/channel_impl.h
   include/grpcpp/client_context.h
   include/grpcpp/completion_queue.h
+  include/grpcpp/completion_queue_impl.h
   include/grpcpp/create_channel.h
+  include/grpcpp/create_channel_impl.h
   include/grpcpp/create_channel_posix.h
+  include/grpcpp/create_channel_posix_impl.h
   include/grpcpp/ext/health_check_service_server_builder_option.h
   include/grpcpp/generic/async_generic_service.h
   include/grpcpp/generic/generic_stub.h
+  include/grpcpp/generic/generic_stub_impl.h
   include/grpcpp/grpcpp.h
   include/grpcpp/health_check_service_interface.h
+  include/grpcpp/health_check_service_interface_impl.h
   include/grpcpp/impl/call.h
   include/grpcpp/impl/channel_argument_option.h
   include/grpcpp/impl/client_unary_call.h
@@ -3004,29 +3341,44 @@ foreach(_hdr
   include/grpcpp/impl/rpc_service_method.h
   include/grpcpp/impl/serialization_traits.h
   include/grpcpp/impl/server_builder_option.h
+  include/grpcpp/impl/server_builder_option_impl.h
   include/grpcpp/impl/server_builder_plugin.h
   include/grpcpp/impl/server_initializer.h
+  include/grpcpp/impl/server_initializer_impl.h
   include/grpcpp/impl/service_type.h
   include/grpcpp/resource_quota.h
+  include/grpcpp/resource_quota_impl.h
   include/grpcpp/security/auth_context.h
   include/grpcpp/security/auth_metadata_processor.h
+  include/grpcpp/security/auth_metadata_processor_impl.h
   include/grpcpp/security/credentials.h
+  include/grpcpp/security/credentials_impl.h
   include/grpcpp/security/server_credentials.h
+  include/grpcpp/security/server_credentials_impl.h
   include/grpcpp/server.h
   include/grpcpp/server_builder.h
+  include/grpcpp/server_builder_impl.h
   include/grpcpp/server_context.h
+  include/grpcpp/server_impl.h
   include/grpcpp/server_posix.h
+  include/grpcpp/server_posix_impl.h
   include/grpcpp/support/async_stream.h
+  include/grpcpp/support/async_stream_impl.h
   include/grpcpp/support/async_unary_call.h
+  include/grpcpp/support/async_unary_call_impl.h
   include/grpcpp/support/byte_buffer.h
   include/grpcpp/support/channel_arguments.h
+  include/grpcpp/support/channel_arguments_impl.h
   include/grpcpp/support/client_callback.h
+  include/grpcpp/support/client_callback_impl.h
   include/grpcpp/support/client_interceptor.h
   include/grpcpp/support/config.h
   include/grpcpp/support/interceptor.h
+  include/grpcpp/support/message_allocator.h
   include/grpcpp/support/proto_buffer_reader.h
   include/grpcpp/support/proto_buffer_writer.h
   include/grpcpp/support/server_callback.h
+  include/grpcpp/support/server_callback_impl.h
   include/grpcpp/support/server_interceptor.h
   include/grpcpp/support/slice.h
   include/grpcpp/support/status.h
@@ -3034,7 +3386,9 @@ foreach(_hdr
   include/grpcpp/support/string_ref.h
   include/grpcpp/support/stub_options.h
   include/grpcpp/support/sync_stream.h
+  include/grpcpp/support/sync_stream_impl.h
   include/grpcpp/support/time.h
+  include/grpcpp/support/validate_service_config.h
   include/grpc/support/alloc.h
   include/grpc/support/atm.h
   include/grpc/support/atm_gcc_atomic.h
@@ -3118,7 +3472,9 @@ foreach(_hdr
   include/grpc++/impl/codegen/time.h
   include/grpcpp/impl/codegen/async_generic_service.h
   include/grpcpp/impl/codegen/async_stream.h
+  include/grpcpp/impl/codegen/async_stream_impl.h
   include/grpcpp/impl/codegen/async_unary_call.h
+  include/grpcpp/impl/codegen/async_unary_call_impl.h
   include/grpcpp/impl/codegen/byte_buffer.h
   include/grpcpp/impl/codegen/call.h
   include/grpcpp/impl/codegen/call_hook.h
@@ -3127,18 +3483,23 @@ foreach(_hdr
   include/grpcpp/impl/codegen/callback_common.h
   include/grpcpp/impl/codegen/channel_interface.h
   include/grpcpp/impl/codegen/client_callback.h
+  include/grpcpp/impl/codegen/client_callback_impl.h
   include/grpcpp/impl/codegen/client_context.h
+  include/grpcpp/impl/codegen/client_context_impl.h
   include/grpcpp/impl/codegen/client_interceptor.h
   include/grpcpp/impl/codegen/client_unary_call.h
   include/grpcpp/impl/codegen/completion_queue.h
+  include/grpcpp/impl/codegen/completion_queue_impl.h
   include/grpcpp/impl/codegen/completion_queue_tag.h
   include/grpcpp/impl/codegen/config.h
   include/grpcpp/impl/codegen/core_codegen_interface.h
   include/grpcpp/impl/codegen/create_auth_context.h
+  include/grpcpp/impl/codegen/delegating_channel.h
   include/grpcpp/impl/codegen/grpc_library.h
   include/grpcpp/impl/codegen/intercepted_channel.h
   include/grpcpp/impl/codegen/interceptor.h
   include/grpcpp/impl/codegen/interceptor_common.h
+  include/grpcpp/impl/codegen/message_allocator.h
   include/grpcpp/impl/codegen/metadata_map.h
   include/grpcpp/impl/codegen/method_handler_impl.h
   include/grpcpp/impl/codegen/rpc_method.h
@@ -3146,7 +3507,9 @@ foreach(_hdr
   include/grpcpp/impl/codegen/security/auth_context.h
   include/grpcpp/impl/codegen/serialization_traits.h
   include/grpcpp/impl/codegen/server_callback.h
+  include/grpcpp/impl/codegen/server_callback_impl.h
   include/grpcpp/impl/codegen/server_context.h
+  include/grpcpp/impl/codegen/server_context_impl.h
   include/grpcpp/impl/codegen/server_interceptor.h
   include/grpcpp/impl/codegen/server_interface.h
   include/grpcpp/impl/codegen/service_type.h
@@ -3156,7 +3519,9 @@ foreach(_hdr
   include/grpcpp/impl/codegen/string_ref.h
   include/grpcpp/impl/codegen/stub_options.h
   include/grpcpp/impl/codegen/sync_stream.h
+  include/grpcpp/impl/codegen/sync_stream_impl.h
   include/grpcpp/impl/codegen/time.h
+  include/grpcpp/impl/codegen/sync.h
   include/grpc++/impl/codegen/proto_utils.h
   include/grpcpp/impl/codegen/proto_buffer_reader.h
   include/grpcpp/impl/codegen/proto_buffer_writer.h
@@ -3209,14 +3574,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(grpc++_core_stats
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -3227,546 +3595,12 @@ target_link_libraries(grpc++_core_stats
   ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
   grpc++
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
 endif (gRPC_BUILD_CODEGEN)
 
 endif (gRPC_BUILD_TESTS)
-
-add_library(grpc++_cronet
-  src/cpp/client/cronet_credentials.cc
-  src/cpp/client/insecure_credentials.cc
-  src/cpp/common/insecure_create_auth_context.cc
-  src/cpp/server/insecure_server_credentials.cc
-  src/cpp/client/channel_cc.cc
-  src/cpp/client/client_context.cc
-  src/cpp/client/client_interceptor.cc
-  src/cpp/client/create_channel.cc
-  src/cpp/client/create_channel_internal.cc
-  src/cpp/client/create_channel_posix.cc
-  src/cpp/client/credentials_cc.cc
-  src/cpp/client/generic_stub.cc
-  src/cpp/common/alarm.cc
-  src/cpp/common/channel_arguments.cc
-  src/cpp/common/channel_filter.cc
-  src/cpp/common/completion_queue_cc.cc
-  src/cpp/common/core_codegen.cc
-  src/cpp/common/resource_quota_cc.cc
-  src/cpp/common/rpc_method.cc
-  src/cpp/common/version_cc.cc
-  src/cpp/server/async_generic_service.cc
-  src/cpp/server/channel_argument_option.cc
-  src/cpp/server/create_default_thread_pool.cc
-  src/cpp/server/dynamic_thread_pool.cc
-  src/cpp/server/health/default_health_check_service.cc
-  src/cpp/server/health/health_check_service.cc
-  src/cpp/server/health/health_check_service_server_builder_option.cc
-  src/cpp/server/server_builder.cc
-  src/cpp/server/server_cc.cc
-  src/cpp/server/server_context.cc
-  src/cpp/server/server_credentials.cc
-  src/cpp/server/server_posix.cc
-  src/cpp/thread_manager/thread_manager.cc
-  src/cpp/util/byte_buffer_cc.cc
-  src/cpp/util/status.cc
-  src/cpp/util/string_ref.cc
-  src/cpp/util/time_cc.cc
-  src/core/ext/filters/client_channel/health/health.pb.c
-  third_party/nanopb/pb_common.c
-  third_party/nanopb/pb_decode.c
-  third_party/nanopb/pb_encode.c
-  src/cpp/codegen/codegen_init.cc
-  src/core/ext/transport/chttp2/client/insecure/channel_create.cc
-  src/core/ext/transport/chttp2/client/insecure/channel_create_posix.cc
-  src/core/ext/transport/chttp2/client/authority.cc
-  src/core/ext/transport/chttp2/client/chttp2_connector.cc
-  src/core/ext/transport/chttp2/transport/bin_decoder.cc
-  src/core/ext/transport/chttp2/transport/bin_encoder.cc
-  src/core/ext/transport/chttp2/transport/chttp2_plugin.cc
-  src/core/ext/transport/chttp2/transport/chttp2_transport.cc
-  src/core/ext/transport/chttp2/transport/context_list.cc
-  src/core/ext/transport/chttp2/transport/flow_control.cc
-  src/core/ext/transport/chttp2/transport/frame_data.cc
-  src/core/ext/transport/chttp2/transport/frame_goaway.cc
-  src/core/ext/transport/chttp2/transport/frame_ping.cc
-  src/core/ext/transport/chttp2/transport/frame_rst_stream.cc
-  src/core/ext/transport/chttp2/transport/frame_settings.cc
-  src/core/ext/transport/chttp2/transport/frame_window_update.cc
-  src/core/ext/transport/chttp2/transport/hpack_encoder.cc
-  src/core/ext/transport/chttp2/transport/hpack_parser.cc
-  src/core/ext/transport/chttp2/transport/hpack_table.cc
-  src/core/ext/transport/chttp2/transport/http2_settings.cc
-  src/core/ext/transport/chttp2/transport/huffsyms.cc
-  src/core/ext/transport/chttp2/transport/incoming_metadata.cc
-  src/core/ext/transport/chttp2/transport/parsing.cc
-  src/core/ext/transport/chttp2/transport/stream_lists.cc
-  src/core/ext/transport/chttp2/transport/stream_map.cc
-  src/core/ext/transport/chttp2/transport/varint.cc
-  src/core/ext/transport/chttp2/transport/writing.cc
-  src/core/lib/avl/avl.cc
-  src/core/lib/backoff/backoff.cc
-  src/core/lib/channel/channel_args.cc
-  src/core/lib/channel/channel_stack.cc
-  src/core/lib/channel/channel_stack_builder.cc
-  src/core/lib/channel/channel_trace.cc
-  src/core/lib/channel/channelz.cc
-  src/core/lib/channel/channelz_registry.cc
-  src/core/lib/channel/connected_channel.cc
-  src/core/lib/channel/handshaker.cc
-  src/core/lib/channel/handshaker_factory.cc
-  src/core/lib/channel/handshaker_registry.cc
-  src/core/lib/channel/status_util.cc
-  src/core/lib/compression/compression.cc
-  src/core/lib/compression/compression_internal.cc
-  src/core/lib/compression/message_compress.cc
-  src/core/lib/compression/stream_compression.cc
-  src/core/lib/compression/stream_compression_gzip.cc
-  src/core/lib/compression/stream_compression_identity.cc
-  src/core/lib/debug/stats.cc
-  src/core/lib/debug/stats_data.cc
-  src/core/lib/http/format_request.cc
-  src/core/lib/http/httpcli.cc
-  src/core/lib/http/parser.cc
-  src/core/lib/iomgr/buffer_list.cc
-  src/core/lib/iomgr/call_combiner.cc
-  src/core/lib/iomgr/combiner.cc
-  src/core/lib/iomgr/endpoint.cc
-  src/core/lib/iomgr/endpoint_pair_posix.cc
-  src/core/lib/iomgr/endpoint_pair_uv.cc
-  src/core/lib/iomgr/endpoint_pair_windows.cc
-  src/core/lib/iomgr/error.cc
-  src/core/lib/iomgr/ev_epoll1_linux.cc
-  src/core/lib/iomgr/ev_epollex_linux.cc
-  src/core/lib/iomgr/ev_poll_posix.cc
-  src/core/lib/iomgr/ev_posix.cc
-  src/core/lib/iomgr/ev_windows.cc
-  src/core/lib/iomgr/exec_ctx.cc
-  src/core/lib/iomgr/executor.cc
-  src/core/lib/iomgr/fork_posix.cc
-  src/core/lib/iomgr/fork_windows.cc
-  src/core/lib/iomgr/gethostname_fallback.cc
-  src/core/lib/iomgr/gethostname_host_name_max.cc
-  src/core/lib/iomgr/gethostname_sysconf.cc
-  src/core/lib/iomgr/grpc_if_nametoindex_posix.cc
-  src/core/lib/iomgr/grpc_if_nametoindex_unsupported.cc
-  src/core/lib/iomgr/internal_errqueue.cc
-  src/core/lib/iomgr/iocp_windows.cc
-  src/core/lib/iomgr/iomgr.cc
-  src/core/lib/iomgr/iomgr_custom.cc
-  src/core/lib/iomgr/iomgr_internal.cc
-  src/core/lib/iomgr/iomgr_posix.cc
-  src/core/lib/iomgr/iomgr_uv.cc
-  src/core/lib/iomgr/iomgr_windows.cc
-  src/core/lib/iomgr/is_epollexclusive_available.cc
-  src/core/lib/iomgr/load_file.cc
-  src/core/lib/iomgr/lockfree_event.cc
-  src/core/lib/iomgr/polling_entity.cc
-  src/core/lib/iomgr/pollset.cc
-  src/core/lib/iomgr/pollset_custom.cc
-  src/core/lib/iomgr/pollset_set.cc
-  src/core/lib/iomgr/pollset_set_custom.cc
-  src/core/lib/iomgr/pollset_set_windows.cc
-  src/core/lib/iomgr/pollset_uv.cc
-  src/core/lib/iomgr/pollset_windows.cc
-  src/core/lib/iomgr/resolve_address.cc
-  src/core/lib/iomgr/resolve_address_custom.cc
-  src/core/lib/iomgr/resolve_address_posix.cc
-  src/core/lib/iomgr/resolve_address_windows.cc
-  src/core/lib/iomgr/resource_quota.cc
-  src/core/lib/iomgr/sockaddr_utils.cc
-  src/core/lib/iomgr/socket_factory_posix.cc
-  src/core/lib/iomgr/socket_mutator.cc
-  src/core/lib/iomgr/socket_utils_common_posix.cc
-  src/core/lib/iomgr/socket_utils_linux.cc
-  src/core/lib/iomgr/socket_utils_posix.cc
-  src/core/lib/iomgr/socket_utils_uv.cc
-  src/core/lib/iomgr/socket_utils_windows.cc
-  src/core/lib/iomgr/socket_windows.cc
-  src/core/lib/iomgr/tcp_client.cc
-  src/core/lib/iomgr/tcp_client_custom.cc
-  src/core/lib/iomgr/tcp_client_posix.cc
-  src/core/lib/iomgr/tcp_client_windows.cc
-  src/core/lib/iomgr/tcp_custom.cc
-  src/core/lib/iomgr/tcp_posix.cc
-  src/core/lib/iomgr/tcp_server.cc
-  src/core/lib/iomgr/tcp_server_custom.cc
-  src/core/lib/iomgr/tcp_server_posix.cc
-  src/core/lib/iomgr/tcp_server_utils_posix_common.cc
-  src/core/lib/iomgr/tcp_server_utils_posix_ifaddrs.cc
-  src/core/lib/iomgr/tcp_server_utils_posix_noifaddrs.cc
-  src/core/lib/iomgr/tcp_server_windows.cc
-  src/core/lib/iomgr/tcp_uv.cc
-  src/core/lib/iomgr/tcp_windows.cc
-  src/core/lib/iomgr/time_averaged_stats.cc
-  src/core/lib/iomgr/timer.cc
-  src/core/lib/iomgr/timer_custom.cc
-  src/core/lib/iomgr/timer_generic.cc
-  src/core/lib/iomgr/timer_heap.cc
-  src/core/lib/iomgr/timer_manager.cc
-  src/core/lib/iomgr/timer_uv.cc
-  src/core/lib/iomgr/udp_server.cc
-  src/core/lib/iomgr/unix_sockets_posix.cc
-  src/core/lib/iomgr/unix_sockets_posix_noop.cc
-  src/core/lib/iomgr/wakeup_fd_cv.cc
-  src/core/lib/iomgr/wakeup_fd_eventfd.cc
-  src/core/lib/iomgr/wakeup_fd_nospecial.cc
-  src/core/lib/iomgr/wakeup_fd_pipe.cc
-  src/core/lib/iomgr/wakeup_fd_posix.cc
-  src/core/lib/json/json.cc
-  src/core/lib/json/json_reader.cc
-  src/core/lib/json/json_string.cc
-  src/core/lib/json/json_writer.cc
-  src/core/lib/slice/b64.cc
-  src/core/lib/slice/percent_encoding.cc
-  src/core/lib/slice/slice.cc
-  src/core/lib/slice/slice_buffer.cc
-  src/core/lib/slice/slice_intern.cc
-  src/core/lib/slice/slice_string_helpers.cc
-  src/core/lib/surface/api_trace.cc
-  src/core/lib/surface/byte_buffer.cc
-  src/core/lib/surface/byte_buffer_reader.cc
-  src/core/lib/surface/call.cc
-  src/core/lib/surface/call_details.cc
-  src/core/lib/surface/call_log_batch.cc
-  src/core/lib/surface/channel.cc
-  src/core/lib/surface/channel_init.cc
-  src/core/lib/surface/channel_ping.cc
-  src/core/lib/surface/channel_stack_type.cc
-  src/core/lib/surface/completion_queue.cc
-  src/core/lib/surface/completion_queue_factory.cc
-  src/core/lib/surface/event_string.cc
-  src/core/lib/surface/lame_client.cc
-  src/core/lib/surface/metadata_array.cc
-  src/core/lib/surface/server.cc
-  src/core/lib/surface/validate_metadata.cc
-  src/core/lib/surface/version.cc
-  src/core/lib/transport/bdp_estimator.cc
-  src/core/lib/transport/byte_stream.cc
-  src/core/lib/transport/connectivity_state.cc
-  src/core/lib/transport/error_utils.cc
-  src/core/lib/transport/metadata.cc
-  src/core/lib/transport/metadata_batch.cc
-  src/core/lib/transport/pid_controller.cc
-  src/core/lib/transport/service_config.cc
-  src/core/lib/transport/static_metadata.cc
-  src/core/lib/transport/status_conversion.cc
-  src/core/lib/transport/status_metadata.cc
-  src/core/lib/transport/timeout_encoding.cc
-  src/core/lib/transport/transport.cc
-  src/core/lib/transport/transport_op_string.cc
-  src/core/lib/uri/uri_parser.cc
-  src/core/lib/debug/trace.cc
-  src/core/ext/transport/chttp2/alpn/alpn.cc
-  src/core/ext/filters/http/client/http_client_filter.cc
-  src/core/ext/filters/http/http_filters_plugin.cc
-  src/core/ext/filters/http/message_compress/message_compress_filter.cc
-  src/core/ext/filters/http/server/http_server_filter.cc
-  src/core/ext/filters/client_channel/backup_poller.cc
-  src/core/ext/filters/client_channel/channel_connectivity.cc
-  src/core/ext/filters/client_channel/client_channel.cc
-  src/core/ext/filters/client_channel/client_channel_channelz.cc
-  src/core/ext/filters/client_channel/client_channel_factory.cc
-  src/core/ext/filters/client_channel/client_channel_plugin.cc
-  src/core/ext/filters/client_channel/connector.cc
-  src/core/ext/filters/client_channel/global_subchannel_pool.cc
-  src/core/ext/filters/client_channel/health/health_check_client.cc
-  src/core/ext/filters/client_channel/http_connect_handshaker.cc
-  src/core/ext/filters/client_channel/http_proxy.cc
-  src/core/ext/filters/client_channel/lb_policy.cc
-  src/core/ext/filters/client_channel/lb_policy_registry.cc
-  src/core/ext/filters/client_channel/local_subchannel_pool.cc
-  src/core/ext/filters/client_channel/parse_address.cc
-  src/core/ext/filters/client_channel/proxy_mapper.cc
-  src/core/ext/filters/client_channel/proxy_mapper_registry.cc
-  src/core/ext/filters/client_channel/request_routing.cc
-  src/core/ext/filters/client_channel/resolver.cc
-  src/core/ext/filters/client_channel/resolver_registry.cc
-  src/core/ext/filters/client_channel/resolver_result_parsing.cc
-  src/core/ext/filters/client_channel/retry_throttle.cc
-  src/core/ext/filters/client_channel/server_address.cc
-  src/core/ext/filters/client_channel/subchannel.cc
-  src/core/ext/filters/client_channel/subchannel_pool_interface.cc
-  src/core/ext/filters/deadline/deadline_filter.cc
-  src/core/ext/transport/chttp2/server/insecure/server_chttp2.cc
-  src/core/ext/transport/chttp2/server/insecure/server_chttp2_posix.cc
-  src/core/ext/transport/chttp2/server/chttp2_server.cc
-  src/core/ext/filters/census/grpc_context.cc
-)
-
-if(WIN32 AND MSVC)
-  set_target_properties(grpc++_cronet PROPERTIES COMPILE_PDB_NAME "grpc++_cronet"
-    COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
-  )
-  if (gRPC_INSTALL)
-    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/grpc++_cronet.pdb
-      DESTINATION ${gRPC_INSTALL_LIBDIR} OPTIONAL
-    )
-  endif()
-endif()
-
-
-target_include_directories(grpc++_cronet
-  PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
-  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
-  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
-  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
-  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTO_GENS_DIR}
-)
-target_link_libraries(grpc++_cronet
-  ${_gRPC_BASELIB_LIBRARIES}
-  ${_gRPC_SSL_LIBRARIES}
-  ${_gRPC_PROTOBUF_LIBRARIES}
-  ${_gRPC_ALLTARGETS_LIBRARIES}
-  gpr
-  grpc_cronet
-  grpc
-)
-
-foreach(_hdr
-  include/grpc++/alarm.h
-  include/grpc++/channel.h
-  include/grpc++/client_context.h
-  include/grpc++/completion_queue.h
-  include/grpc++/create_channel.h
-  include/grpc++/create_channel_posix.h
-  include/grpc++/ext/health_check_service_server_builder_option.h
-  include/grpc++/generic/async_generic_service.h
-  include/grpc++/generic/generic_stub.h
-  include/grpc++/grpc++.h
-  include/grpc++/health_check_service_interface.h
-  include/grpc++/impl/call.h
-  include/grpc++/impl/channel_argument_option.h
-  include/grpc++/impl/client_unary_call.h
-  include/grpc++/impl/codegen/core_codegen.h
-  include/grpc++/impl/grpc_library.h
-  include/grpc++/impl/method_handler_impl.h
-  include/grpc++/impl/rpc_method.h
-  include/grpc++/impl/rpc_service_method.h
-  include/grpc++/impl/serialization_traits.h
-  include/grpc++/impl/server_builder_option.h
-  include/grpc++/impl/server_builder_plugin.h
-  include/grpc++/impl/server_initializer.h
-  include/grpc++/impl/service_type.h
-  include/grpc++/resource_quota.h
-  include/grpc++/security/auth_context.h
-  include/grpc++/security/auth_metadata_processor.h
-  include/grpc++/security/credentials.h
-  include/grpc++/security/server_credentials.h
-  include/grpc++/server.h
-  include/grpc++/server_builder.h
-  include/grpc++/server_context.h
-  include/grpc++/server_posix.h
-  include/grpc++/support/async_stream.h
-  include/grpc++/support/async_unary_call.h
-  include/grpc++/support/byte_buffer.h
-  include/grpc++/support/channel_arguments.h
-  include/grpc++/support/config.h
-  include/grpc++/support/slice.h
-  include/grpc++/support/status.h
-  include/grpc++/support/status_code_enum.h
-  include/grpc++/support/string_ref.h
-  include/grpc++/support/stub_options.h
-  include/grpc++/support/sync_stream.h
-  include/grpc++/support/time.h
-  include/grpcpp/alarm.h
-  include/grpcpp/alarm_impl.h
-  include/grpcpp/channel.h
-  include/grpcpp/client_context.h
-  include/grpcpp/completion_queue.h
-  include/grpcpp/create_channel.h
-  include/grpcpp/create_channel_posix.h
-  include/grpcpp/ext/health_check_service_server_builder_option.h
-  include/grpcpp/generic/async_generic_service.h
-  include/grpcpp/generic/generic_stub.h
-  include/grpcpp/grpcpp.h
-  include/grpcpp/health_check_service_interface.h
-  include/grpcpp/impl/call.h
-  include/grpcpp/impl/channel_argument_option.h
-  include/grpcpp/impl/client_unary_call.h
-  include/grpcpp/impl/codegen/core_codegen.h
-  include/grpcpp/impl/grpc_library.h
-  include/grpcpp/impl/method_handler_impl.h
-  include/grpcpp/impl/rpc_method.h
-  include/grpcpp/impl/rpc_service_method.h
-  include/grpcpp/impl/serialization_traits.h
-  include/grpcpp/impl/server_builder_option.h
-  include/grpcpp/impl/server_builder_plugin.h
-  include/grpcpp/impl/server_initializer.h
-  include/grpcpp/impl/service_type.h
-  include/grpcpp/resource_quota.h
-  include/grpcpp/security/auth_context.h
-  include/grpcpp/security/auth_metadata_processor.h
-  include/grpcpp/security/credentials.h
-  include/grpcpp/security/server_credentials.h
-  include/grpcpp/server.h
-  include/grpcpp/server_builder.h
-  include/grpcpp/server_context.h
-  include/grpcpp/server_posix.h
-  include/grpcpp/support/async_stream.h
-  include/grpcpp/support/async_unary_call.h
-  include/grpcpp/support/byte_buffer.h
-  include/grpcpp/support/channel_arguments.h
-  include/grpcpp/support/client_callback.h
-  include/grpcpp/support/client_interceptor.h
-  include/grpcpp/support/config.h
-  include/grpcpp/support/interceptor.h
-  include/grpcpp/support/proto_buffer_reader.h
-  include/grpcpp/support/proto_buffer_writer.h
-  include/grpcpp/support/server_callback.h
-  include/grpcpp/support/server_interceptor.h
-  include/grpcpp/support/slice.h
-  include/grpcpp/support/status.h
-  include/grpcpp/support/status_code_enum.h
-  include/grpcpp/support/string_ref.h
-  include/grpcpp/support/stub_options.h
-  include/grpcpp/support/sync_stream.h
-  include/grpcpp/support/time.h
-  include/grpc/support/alloc.h
-  include/grpc/support/atm.h
-  include/grpc/support/atm_gcc_atomic.h
-  include/grpc/support/atm_gcc_sync.h
-  include/grpc/support/atm_windows.h
-  include/grpc/support/cpu.h
-  include/grpc/support/log.h
-  include/grpc/support/log_windows.h
-  include/grpc/support/port_platform.h
-  include/grpc/support/string_util.h
-  include/grpc/support/sync.h
-  include/grpc/support/sync_custom.h
-  include/grpc/support/sync_generic.h
-  include/grpc/support/sync_posix.h
-  include/grpc/support/sync_windows.h
-  include/grpc/support/thd_id.h
-  include/grpc/support/time.h
-  include/grpc/impl/codegen/atm.h
-  include/grpc/impl/codegen/atm_gcc_atomic.h
-  include/grpc/impl/codegen/atm_gcc_sync.h
-  include/grpc/impl/codegen/atm_windows.h
-  include/grpc/impl/codegen/fork.h
-  include/grpc/impl/codegen/gpr_slice.h
-  include/grpc/impl/codegen/gpr_types.h
-  include/grpc/impl/codegen/log.h
-  include/grpc/impl/codegen/port_platform.h
-  include/grpc/impl/codegen/sync.h
-  include/grpc/impl/codegen/sync_custom.h
-  include/grpc/impl/codegen/sync_generic.h
-  include/grpc/impl/codegen/sync_posix.h
-  include/grpc/impl/codegen/sync_windows.h
-  include/grpc/byte_buffer.h
-  include/grpc/byte_buffer_reader.h
-  include/grpc/compression.h
-  include/grpc/fork.h
-  include/grpc/grpc.h
-  include/grpc/grpc_posix.h
-  include/grpc/grpc_security_constants.h
-  include/grpc/load_reporting.h
-  include/grpc/slice.h
-  include/grpc/slice_buffer.h
-  include/grpc/status.h
-  include/grpc/support/workaround_list.h
-  include/grpc/impl/codegen/byte_buffer.h
-  include/grpc/impl/codegen/byte_buffer_reader.h
-  include/grpc/impl/codegen/compression_types.h
-  include/grpc/impl/codegen/connectivity_state.h
-  include/grpc/impl/codegen/grpc_types.h
-  include/grpc/impl/codegen/propagation_bits.h
-  include/grpc/impl/codegen/slice.h
-  include/grpc/impl/codegen/status.h
-  include/grpc++/impl/codegen/async_stream.h
-  include/grpc++/impl/codegen/async_unary_call.h
-  include/grpc++/impl/codegen/byte_buffer.h
-  include/grpc++/impl/codegen/call.h
-  include/grpc++/impl/codegen/call_hook.h
-  include/grpc++/impl/codegen/channel_interface.h
-  include/grpc++/impl/codegen/client_context.h
-  include/grpc++/impl/codegen/client_unary_call.h
-  include/grpc++/impl/codegen/completion_queue.h
-  include/grpc++/impl/codegen/completion_queue_tag.h
-  include/grpc++/impl/codegen/config.h
-  include/grpc++/impl/codegen/core_codegen_interface.h
-  include/grpc++/impl/codegen/create_auth_context.h
-  include/grpc++/impl/codegen/grpc_library.h
-  include/grpc++/impl/codegen/metadata_map.h
-  include/grpc++/impl/codegen/method_handler_impl.h
-  include/grpc++/impl/codegen/rpc_method.h
-  include/grpc++/impl/codegen/rpc_service_method.h
-  include/grpc++/impl/codegen/security/auth_context.h
-  include/grpc++/impl/codegen/serialization_traits.h
-  include/grpc++/impl/codegen/server_context.h
-  include/grpc++/impl/codegen/server_interface.h
-  include/grpc++/impl/codegen/service_type.h
-  include/grpc++/impl/codegen/slice.h
-  include/grpc++/impl/codegen/status.h
-  include/grpc++/impl/codegen/status_code_enum.h
-  include/grpc++/impl/codegen/string_ref.h
-  include/grpc++/impl/codegen/stub_options.h
-  include/grpc++/impl/codegen/sync_stream.h
-  include/grpc++/impl/codegen/time.h
-  include/grpcpp/impl/codegen/async_generic_service.h
-  include/grpcpp/impl/codegen/async_stream.h
-  include/grpcpp/impl/codegen/async_unary_call.h
-  include/grpcpp/impl/codegen/byte_buffer.h
-  include/grpcpp/impl/codegen/call.h
-  include/grpcpp/impl/codegen/call_hook.h
-  include/grpcpp/impl/codegen/call_op_set.h
-  include/grpcpp/impl/codegen/call_op_set_interface.h
-  include/grpcpp/impl/codegen/callback_common.h
-  include/grpcpp/impl/codegen/channel_interface.h
-  include/grpcpp/impl/codegen/client_callback.h
-  include/grpcpp/impl/codegen/client_context.h
-  include/grpcpp/impl/codegen/client_interceptor.h
-  include/grpcpp/impl/codegen/client_unary_call.h
-  include/grpcpp/impl/codegen/completion_queue.h
-  include/grpcpp/impl/codegen/completion_queue_tag.h
-  include/grpcpp/impl/codegen/config.h
-  include/grpcpp/impl/codegen/core_codegen_interface.h
-  include/grpcpp/impl/codegen/create_auth_context.h
-  include/grpcpp/impl/codegen/grpc_library.h
-  include/grpcpp/impl/codegen/intercepted_channel.h
-  include/grpcpp/impl/codegen/interceptor.h
-  include/grpcpp/impl/codegen/interceptor_common.h
-  include/grpcpp/impl/codegen/metadata_map.h
-  include/grpcpp/impl/codegen/method_handler_impl.h
-  include/grpcpp/impl/codegen/rpc_method.h
-  include/grpcpp/impl/codegen/rpc_service_method.h
-  include/grpcpp/impl/codegen/security/auth_context.h
-  include/grpcpp/impl/codegen/serialization_traits.h
-  include/grpcpp/impl/codegen/server_callback.h
-  include/grpcpp/impl/codegen/server_context.h
-  include/grpcpp/impl/codegen/server_interceptor.h
-  include/grpcpp/impl/codegen/server_interface.h
-  include/grpcpp/impl/codegen/service_type.h
-  include/grpcpp/impl/codegen/slice.h
-  include/grpcpp/impl/codegen/status.h
-  include/grpcpp/impl/codegen/status_code_enum.h
-  include/grpcpp/impl/codegen/string_ref.h
-  include/grpcpp/impl/codegen/stub_options.h
-  include/grpcpp/impl/codegen/sync_stream.h
-  include/grpcpp/impl/codegen/time.h
-  include/grpc/census.h
-)
-  string(REPLACE "include/" "" _path ${_hdr})
-  get_filename_component(_path ${_path} PATH)
-  install(FILES ${_hdr}
-    DESTINATION "${gRPC_INSTALL_INCLUDEDIR}/${_path}"
-  )
-endforeach()
-
-
-if (gRPC_INSTALL)
-  install(TARGETS grpc++_cronet EXPORT gRPCTargets
-    RUNTIME DESTINATION ${gRPC_INSTALL_BINDIR}
-    LIBRARY DESTINATION ${gRPC_INSTALL_LIBDIR}
-    ARCHIVE DESTINATION ${gRPC_INSTALL_LIBDIR}
-  )
-endif()
-
 
 if (gRPC_BUILD_CODEGEN)
 add_library(grpc++_error_details
@@ -3795,14 +3629,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(grpc++_error_details
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 target_link_libraries(grpc++_error_details
@@ -3815,6 +3652,7 @@ target_link_libraries(grpc++_error_details
 foreach(_hdr
   include/grpc++/support/error_details.h
   include/grpcpp/support/error_details.h
+  include/grpcpp/support/error_details_impl.h
 )
   string(REPLACE "include/" "" _path ${_hdr})
   get_filename_component(_path ${_path} PATH)
@@ -3824,6 +3662,7 @@ foreach(_hdr
 endforeach()
 endif (gRPC_BUILD_CODEGEN)
 
+if (gRPC_BUILD_CODEGEN)
 
 if (gRPC_INSTALL)
   install(TARGETS grpc++_error_details EXPORT gRPCTargets
@@ -3833,6 +3672,7 @@ if (gRPC_INSTALL)
   )
 endif()
 
+endif (gRPC_BUILD_CODEGEN)
 if (gRPC_BUILD_TESTS)
 
 if (gRPC_BUILD_CODEGEN)
@@ -3862,14 +3702,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(grpc++_proto_reflection_desc_db
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -3881,6 +3724,7 @@ target_link_libraries(grpc++_proto_reflection_desc_db
   ${_gRPC_ALLTARGETS_LIBRARIES}
   grpc++
   grpc
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
 foreach(_hdr
@@ -3925,14 +3769,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(grpc++_reflection
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 target_link_libraries(grpc++_reflection
@@ -3945,6 +3792,7 @@ target_link_libraries(grpc++_reflection
 foreach(_hdr
   include/grpc++/ext/proto_server_reflection_plugin.h
   include/grpcpp/ext/proto_server_reflection_plugin.h
+  include/grpcpp/ext/proto_server_reflection_plugin_impl.h
 )
   string(REPLACE "include/" "" _path ${_hdr})
   get_filename_component(_path ${_path} PATH)
@@ -3954,6 +3802,7 @@ foreach(_hdr
 endforeach()
 endif (gRPC_BUILD_CODEGEN)
 
+if (gRPC_BUILD_CODEGEN)
 
 if (gRPC_INSTALL)
   install(TARGETS grpc++_reflection EXPORT gRPCTargets
@@ -3963,6 +3812,7 @@ if (gRPC_INSTALL)
   )
 endif()
 
+endif (gRPC_BUILD_CODEGEN)
 if (gRPC_BUILD_TESTS)
 
 add_library(grpc++_test_config
@@ -3984,14 +3834,17 @@ endif()
 target_include_directories(grpc++_test_config
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -4001,6 +3854,7 @@ target_include_directories(grpc++_test_config
 target_link_libraries(grpc++_test_config
   ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
 
@@ -4078,14 +3932,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(grpc++_test_util
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -4098,6 +3955,7 @@ target_link_libraries(grpc++_test_util
   grpc++
   grpc_test_util
   grpc
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
 foreach(_hdr
@@ -4133,7 +3991,9 @@ foreach(_hdr
   include/grpc++/impl/codegen/time.h
   include/grpcpp/impl/codegen/async_generic_service.h
   include/grpcpp/impl/codegen/async_stream.h
+  include/grpcpp/impl/codegen/async_stream_impl.h
   include/grpcpp/impl/codegen/async_unary_call.h
+  include/grpcpp/impl/codegen/async_unary_call_impl.h
   include/grpcpp/impl/codegen/byte_buffer.h
   include/grpcpp/impl/codegen/call.h
   include/grpcpp/impl/codegen/call_hook.h
@@ -4142,18 +4002,23 @@ foreach(_hdr
   include/grpcpp/impl/codegen/callback_common.h
   include/grpcpp/impl/codegen/channel_interface.h
   include/grpcpp/impl/codegen/client_callback.h
+  include/grpcpp/impl/codegen/client_callback_impl.h
   include/grpcpp/impl/codegen/client_context.h
+  include/grpcpp/impl/codegen/client_context_impl.h
   include/grpcpp/impl/codegen/client_interceptor.h
   include/grpcpp/impl/codegen/client_unary_call.h
   include/grpcpp/impl/codegen/completion_queue.h
+  include/grpcpp/impl/codegen/completion_queue_impl.h
   include/grpcpp/impl/codegen/completion_queue_tag.h
   include/grpcpp/impl/codegen/config.h
   include/grpcpp/impl/codegen/core_codegen_interface.h
   include/grpcpp/impl/codegen/create_auth_context.h
+  include/grpcpp/impl/codegen/delegating_channel.h
   include/grpcpp/impl/codegen/grpc_library.h
   include/grpcpp/impl/codegen/intercepted_channel.h
   include/grpcpp/impl/codegen/interceptor.h
   include/grpcpp/impl/codegen/interceptor_common.h
+  include/grpcpp/impl/codegen/message_allocator.h
   include/grpcpp/impl/codegen/metadata_map.h
   include/grpcpp/impl/codegen/method_handler_impl.h
   include/grpcpp/impl/codegen/rpc_method.h
@@ -4161,7 +4026,9 @@ foreach(_hdr
   include/grpcpp/impl/codegen/security/auth_context.h
   include/grpcpp/impl/codegen/serialization_traits.h
   include/grpcpp/impl/codegen/server_callback.h
+  include/grpcpp/impl/codegen/server_callback_impl.h
   include/grpcpp/impl/codegen/server_context.h
+  include/grpcpp/impl/codegen/server_context_impl.h
   include/grpcpp/impl/codegen/server_interceptor.h
   include/grpcpp/impl/codegen/server_interface.h
   include/grpcpp/impl/codegen/service_type.h
@@ -4171,6 +4038,7 @@ foreach(_hdr
   include/grpcpp/impl/codegen/string_ref.h
   include/grpcpp/impl/codegen/stub_options.h
   include/grpcpp/impl/codegen/sync_stream.h
+  include/grpcpp/impl/codegen/sync_stream_impl.h
   include/grpcpp/impl/codegen/time.h
   include/grpc/impl/codegen/byte_buffer.h
   include/grpc/impl/codegen/byte_buffer_reader.h
@@ -4194,6 +4062,7 @@ foreach(_hdr
   include/grpc/impl/codegen/sync_generic.h
   include/grpc/impl/codegen/sync_posix.h
   include/grpc/impl/codegen/sync_windows.h
+  include/grpcpp/impl/codegen/sync.h
   include/grpc++/impl/codegen/proto_utils.h
   include/grpcpp/impl/codegen/proto_buffer_reader.h
   include/grpcpp/impl/codegen/proto_buffer_writer.h
@@ -4273,14 +4142,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(grpc++_test_util_unsecure
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -4293,6 +4165,7 @@ target_link_libraries(grpc++_test_util_unsecure
   grpc++_unsecure
   grpc_test_util_unsecure
   grpc_unsecure
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
 foreach(_hdr
@@ -4328,7 +4201,9 @@ foreach(_hdr
   include/grpc++/impl/codegen/time.h
   include/grpcpp/impl/codegen/async_generic_service.h
   include/grpcpp/impl/codegen/async_stream.h
+  include/grpcpp/impl/codegen/async_stream_impl.h
   include/grpcpp/impl/codegen/async_unary_call.h
+  include/grpcpp/impl/codegen/async_unary_call_impl.h
   include/grpcpp/impl/codegen/byte_buffer.h
   include/grpcpp/impl/codegen/call.h
   include/grpcpp/impl/codegen/call_hook.h
@@ -4337,18 +4212,23 @@ foreach(_hdr
   include/grpcpp/impl/codegen/callback_common.h
   include/grpcpp/impl/codegen/channel_interface.h
   include/grpcpp/impl/codegen/client_callback.h
+  include/grpcpp/impl/codegen/client_callback_impl.h
   include/grpcpp/impl/codegen/client_context.h
+  include/grpcpp/impl/codegen/client_context_impl.h
   include/grpcpp/impl/codegen/client_interceptor.h
   include/grpcpp/impl/codegen/client_unary_call.h
   include/grpcpp/impl/codegen/completion_queue.h
+  include/grpcpp/impl/codegen/completion_queue_impl.h
   include/grpcpp/impl/codegen/completion_queue_tag.h
   include/grpcpp/impl/codegen/config.h
   include/grpcpp/impl/codegen/core_codegen_interface.h
   include/grpcpp/impl/codegen/create_auth_context.h
+  include/grpcpp/impl/codegen/delegating_channel.h
   include/grpcpp/impl/codegen/grpc_library.h
   include/grpcpp/impl/codegen/intercepted_channel.h
   include/grpcpp/impl/codegen/interceptor.h
   include/grpcpp/impl/codegen/interceptor_common.h
+  include/grpcpp/impl/codegen/message_allocator.h
   include/grpcpp/impl/codegen/metadata_map.h
   include/grpcpp/impl/codegen/method_handler_impl.h
   include/grpcpp/impl/codegen/rpc_method.h
@@ -4356,7 +4236,9 @@ foreach(_hdr
   include/grpcpp/impl/codegen/security/auth_context.h
   include/grpcpp/impl/codegen/serialization_traits.h
   include/grpcpp/impl/codegen/server_callback.h
+  include/grpcpp/impl/codegen/server_callback_impl.h
   include/grpcpp/impl/codegen/server_context.h
+  include/grpcpp/impl/codegen/server_context_impl.h
   include/grpcpp/impl/codegen/server_interceptor.h
   include/grpcpp/impl/codegen/server_interface.h
   include/grpcpp/impl/codegen/service_type.h
@@ -4366,6 +4248,7 @@ foreach(_hdr
   include/grpcpp/impl/codegen/string_ref.h
   include/grpcpp/impl/codegen/stub_options.h
   include/grpcpp/impl/codegen/sync_stream.h
+  include/grpcpp/impl/codegen/sync_stream_impl.h
   include/grpcpp/impl/codegen/time.h
   include/grpc/impl/codegen/byte_buffer.h
   include/grpc/impl/codegen/byte_buffer_reader.h
@@ -4389,6 +4272,7 @@ foreach(_hdr
   include/grpc/impl/codegen/sync_generic.h
   include/grpc/impl/codegen/sync_posix.h
   include/grpc/impl/codegen/sync_windows.h
+  include/grpcpp/impl/codegen/sync.h
   include/grpc++/impl/codegen/proto_utils.h
   include/grpcpp/impl/codegen/proto_buffer_reader.h
   include/grpcpp/impl/codegen/proto_buffer_writer.h
@@ -4425,11 +4309,13 @@ add_library(grpc++_unsecure
   src/cpp/common/core_codegen.cc
   src/cpp/common/resource_quota_cc.cc
   src/cpp/common/rpc_method.cc
+  src/cpp/common/validate_service_config.cc
   src/cpp/common/version_cc.cc
   src/cpp/server/async_generic_service.cc
   src/cpp/server/channel_argument_option.cc
   src/cpp/server/create_default_thread_pool.cc
   src/cpp/server/dynamic_thread_pool.cc
+  src/cpp/server/external_connection_acceptor_impl.cc
   src/cpp/server/health/default_health_check_service.cc
   src/cpp/server/health/health_check_service.cc
   src/cpp/server/health/health_check_service_server_builder_option.cc
@@ -4443,10 +4329,13 @@ add_library(grpc++_unsecure
   src/cpp/util/status.cc
   src/cpp/util/string_ref.cc
   src/cpp/util/time_cc.cc
-  src/core/ext/filters/client_channel/health/health.pb.c
-  third_party/nanopb/pb_common.c
-  third_party/nanopb/pb_decode.c
-  third_party/nanopb/pb_encode.c
+  src/core/ext/upb-generated/src/proto/grpc/health/v1/health.upb.c
+  third_party/upb/upb/decode.c
+  third_party/upb/upb/encode.c
+  third_party/upb/upb/msg.c
+  third_party/upb/upb/port.c
+  third_party/upb/upb/table.c
+  third_party/upb/upb/upb.c
   src/cpp/codegen/codegen_init.cc
 )
 
@@ -4465,14 +4354,17 @@ endif()
 target_include_directories(grpc++_unsecure
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 target_link_libraries(grpc++_unsecure
@@ -4532,15 +4424,21 @@ foreach(_hdr
   include/grpcpp/alarm.h
   include/grpcpp/alarm_impl.h
   include/grpcpp/channel.h
+  include/grpcpp/channel_impl.h
   include/grpcpp/client_context.h
   include/grpcpp/completion_queue.h
+  include/grpcpp/completion_queue_impl.h
   include/grpcpp/create_channel.h
+  include/grpcpp/create_channel_impl.h
   include/grpcpp/create_channel_posix.h
+  include/grpcpp/create_channel_posix_impl.h
   include/grpcpp/ext/health_check_service_server_builder_option.h
   include/grpcpp/generic/async_generic_service.h
   include/grpcpp/generic/generic_stub.h
+  include/grpcpp/generic/generic_stub_impl.h
   include/grpcpp/grpcpp.h
   include/grpcpp/health_check_service_interface.h
+  include/grpcpp/health_check_service_interface_impl.h
   include/grpcpp/impl/call.h
   include/grpcpp/impl/channel_argument_option.h
   include/grpcpp/impl/client_unary_call.h
@@ -4551,29 +4449,44 @@ foreach(_hdr
   include/grpcpp/impl/rpc_service_method.h
   include/grpcpp/impl/serialization_traits.h
   include/grpcpp/impl/server_builder_option.h
+  include/grpcpp/impl/server_builder_option_impl.h
   include/grpcpp/impl/server_builder_plugin.h
   include/grpcpp/impl/server_initializer.h
+  include/grpcpp/impl/server_initializer_impl.h
   include/grpcpp/impl/service_type.h
   include/grpcpp/resource_quota.h
+  include/grpcpp/resource_quota_impl.h
   include/grpcpp/security/auth_context.h
   include/grpcpp/security/auth_metadata_processor.h
+  include/grpcpp/security/auth_metadata_processor_impl.h
   include/grpcpp/security/credentials.h
+  include/grpcpp/security/credentials_impl.h
   include/grpcpp/security/server_credentials.h
+  include/grpcpp/security/server_credentials_impl.h
   include/grpcpp/server.h
   include/grpcpp/server_builder.h
+  include/grpcpp/server_builder_impl.h
   include/grpcpp/server_context.h
+  include/grpcpp/server_impl.h
   include/grpcpp/server_posix.h
+  include/grpcpp/server_posix_impl.h
   include/grpcpp/support/async_stream.h
+  include/grpcpp/support/async_stream_impl.h
   include/grpcpp/support/async_unary_call.h
+  include/grpcpp/support/async_unary_call_impl.h
   include/grpcpp/support/byte_buffer.h
   include/grpcpp/support/channel_arguments.h
+  include/grpcpp/support/channel_arguments_impl.h
   include/grpcpp/support/client_callback.h
+  include/grpcpp/support/client_callback_impl.h
   include/grpcpp/support/client_interceptor.h
   include/grpcpp/support/config.h
   include/grpcpp/support/interceptor.h
+  include/grpcpp/support/message_allocator.h
   include/grpcpp/support/proto_buffer_reader.h
   include/grpcpp/support/proto_buffer_writer.h
   include/grpcpp/support/server_callback.h
+  include/grpcpp/support/server_callback_impl.h
   include/grpcpp/support/server_interceptor.h
   include/grpcpp/support/slice.h
   include/grpcpp/support/status.h
@@ -4581,7 +4494,9 @@ foreach(_hdr
   include/grpcpp/support/string_ref.h
   include/grpcpp/support/stub_options.h
   include/grpcpp/support/sync_stream.h
+  include/grpcpp/support/sync_stream_impl.h
   include/grpcpp/support/time.h
+  include/grpcpp/support/validate_service_config.h
   include/grpc/support/alloc.h
   include/grpc/support/atm.h
   include/grpc/support/atm_gcc_atomic.h
@@ -4665,7 +4580,9 @@ foreach(_hdr
   include/grpc++/impl/codegen/time.h
   include/grpcpp/impl/codegen/async_generic_service.h
   include/grpcpp/impl/codegen/async_stream.h
+  include/grpcpp/impl/codegen/async_stream_impl.h
   include/grpcpp/impl/codegen/async_unary_call.h
+  include/grpcpp/impl/codegen/async_unary_call_impl.h
   include/grpcpp/impl/codegen/byte_buffer.h
   include/grpcpp/impl/codegen/call.h
   include/grpcpp/impl/codegen/call_hook.h
@@ -4674,18 +4591,23 @@ foreach(_hdr
   include/grpcpp/impl/codegen/callback_common.h
   include/grpcpp/impl/codegen/channel_interface.h
   include/grpcpp/impl/codegen/client_callback.h
+  include/grpcpp/impl/codegen/client_callback_impl.h
   include/grpcpp/impl/codegen/client_context.h
+  include/grpcpp/impl/codegen/client_context_impl.h
   include/grpcpp/impl/codegen/client_interceptor.h
   include/grpcpp/impl/codegen/client_unary_call.h
   include/grpcpp/impl/codegen/completion_queue.h
+  include/grpcpp/impl/codegen/completion_queue_impl.h
   include/grpcpp/impl/codegen/completion_queue_tag.h
   include/grpcpp/impl/codegen/config.h
   include/grpcpp/impl/codegen/core_codegen_interface.h
   include/grpcpp/impl/codegen/create_auth_context.h
+  include/grpcpp/impl/codegen/delegating_channel.h
   include/grpcpp/impl/codegen/grpc_library.h
   include/grpcpp/impl/codegen/intercepted_channel.h
   include/grpcpp/impl/codegen/interceptor.h
   include/grpcpp/impl/codegen/interceptor_common.h
+  include/grpcpp/impl/codegen/message_allocator.h
   include/grpcpp/impl/codegen/metadata_map.h
   include/grpcpp/impl/codegen/method_handler_impl.h
   include/grpcpp/impl/codegen/rpc_method.h
@@ -4693,7 +4615,9 @@ foreach(_hdr
   include/grpcpp/impl/codegen/security/auth_context.h
   include/grpcpp/impl/codegen/serialization_traits.h
   include/grpcpp/impl/codegen/server_callback.h
+  include/grpcpp/impl/codegen/server_callback_impl.h
   include/grpcpp/impl/codegen/server_context.h
+  include/grpcpp/impl/codegen/server_context_impl.h
   include/grpcpp/impl/codegen/server_interceptor.h
   include/grpcpp/impl/codegen/server_interface.h
   include/grpcpp/impl/codegen/service_type.h
@@ -4703,7 +4627,9 @@ foreach(_hdr
   include/grpcpp/impl/codegen/string_ref.h
   include/grpcpp/impl/codegen/stub_options.h
   include/grpcpp/impl/codegen/sync_stream.h
+  include/grpcpp/impl/codegen/sync_stream_impl.h
   include/grpcpp/impl/codegen/time.h
+  include/grpcpp/impl/codegen/sync.h
 )
   string(REPLACE "include/" "" _path ${_hdr})
   get_filename_component(_path ${_path} PATH)
@@ -4742,14 +4668,17 @@ endif()
 target_include_directories(grpc_benchmark
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -4801,14 +4730,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(grpc_cli_libs
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -4821,6 +4753,7 @@ target_link_libraries(grpc_cli_libs
   grpc++_proto_reflection_desc_db
   grpc++
   grpc
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
 foreach(_hdr
@@ -4862,14 +4795,17 @@ endif()
 target_include_directories(grpc_plugin_support
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 target_link_libraries(grpc_plugin_support
@@ -4927,14 +4863,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(grpcpp_channelz
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 target_link_libraries(grpcpp_channelz
@@ -4946,6 +4885,7 @@ target_link_libraries(grpcpp_channelz
 
 foreach(_hdr
   include/grpcpp/ext/channelz_service_plugin.h
+  include/grpcpp/ext/channelz_service_plugin_impl.h
 )
   string(REPLACE "include/" "" _path ${_hdr})
   get_filename_component(_path ${_path} PATH)
@@ -4955,6 +4895,7 @@ foreach(_hdr
 endforeach()
 endif (gRPC_BUILD_CODEGEN)
 
+if (gRPC_BUILD_CODEGEN)
 
 if (gRPC_INSTALL)
   install(TARGETS grpcpp_channelz EXPORT gRPCTargets
@@ -4964,6 +4905,7 @@ if (gRPC_INSTALL)
   )
 endif()
 
+endif (gRPC_BUILD_CODEGEN)
 if (gRPC_BUILD_TESTS)
 
 if (gRPC_BUILD_CODEGEN)
@@ -5007,14 +4949,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(http2_client_main
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -5029,6 +4974,7 @@ target_link_libraries(http2_client_main
   grpc++
   grpc
   grpc++_test_config
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
 endif (gRPC_BUILD_CODEGEN)
@@ -5063,14 +5009,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(interop_client_helper
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -5085,6 +5034,7 @@ target_link_libraries(interop_client_helper
   grpc++
   grpc
   gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
 endif (gRPC_BUILD_CODEGEN)
@@ -5134,14 +5084,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(interop_client_main
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -5158,6 +5111,7 @@ target_link_libraries(interop_client_main
   grpc
   gpr
   grpc++_test_config
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
 endif (gRPC_BUILD_CODEGEN)
@@ -5184,14 +5138,17 @@ endif()
 target_include_directories(interop_server_helper
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -5206,6 +5163,7 @@ target_link_libraries(interop_server_helper
   grpc++
   grpc
   gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
 
@@ -5253,14 +5211,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(interop_server_lib
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -5277,6 +5238,7 @@ target_link_libraries(interop_server_lib
   grpc
   gpr
   grpc++_test_config
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
 endif (gRPC_BUILD_CODEGEN)
@@ -5303,14 +5265,17 @@ endif()
 target_include_directories(interop_server_main
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -5321,6 +5286,7 @@ target_link_libraries(interop_server_main
   ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
   interop_server_lib
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
 
@@ -5408,14 +5374,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(qps
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -5430,6 +5399,7 @@ target_link_libraries(qps
   grpc++_core_stats
   grpc++
   grpc
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
 endif (gRPC_BUILD_CODEGEN)
@@ -5456,14 +5426,17 @@ endif()
 target_include_directories(grpc_csharp_ext
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
   # avoid dependency on libstdc++
   if (_gRPC_CORE_NOSTDCXX_FLAGS)
@@ -5509,26 +5482,30 @@ endif()
 target_include_directories(bad_client_test
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
-  # avoid dependency on libstdc++
-  if (_gRPC_CORE_NOSTDCXX_FLAGS)
-    set_target_properties(bad_client_test PROPERTIES LINKER_LANGUAGE C)
-    # only use the flags for C++ source files
-    target_compile_options(bad_client_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
-  endif()
 target_link_libraries(bad_client_test
+  ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
   grpc_test_util_unsecure
   grpc_unsecure
   gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
 
@@ -5554,14 +5531,17 @@ endif()
 target_include_directories(bad_ssl_test_server
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
   # avoid dependency on libstdc++
   if (_gRPC_CORE_NOSTDCXX_FLAGS)
@@ -5604,6 +5584,7 @@ add_library(end2end_tests
   test/core/end2end/tests/empty_batch.cc
   test/core/end2end/tests/filter_call_init_fails.cc
   test/core/end2end/tests/filter_causes_close.cc
+  test/core/end2end/tests/filter_context.cc
   test/core/end2end/tests/filter_latency.cc
   test/core/end2end/tests/filter_status_code.cc
   test/core/end2end/tests/graceful_server_shutdown.cc
@@ -5677,14 +5658,17 @@ endif()
 target_include_directories(end2end_tests
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
   # avoid dependency on libstdc++
   if (_gRPC_CORE_NOSTDCXX_FLAGS)
@@ -5727,6 +5711,7 @@ add_library(end2end_nosec_tests
   test/core/end2end/tests/empty_batch.cc
   test/core/end2end/tests/filter_call_init_fails.cc
   test/core/end2end/tests/filter_causes_close.cc
+  test/core/end2end/tests/filter_context.cc
   test/core/end2end/tests/filter_latency.cc
   test/core/end2end/tests/filter_status_code.cc
   test/core/end2end/tests/graceful_server_shutdown.cc
@@ -5800,14 +5785,17 @@ endif()
 target_include_directories(end2end_nosec_tests
   PUBLIC $<INSTALL_INTERFACE:${gRPC_INSTALL_INCLUDEDIR}> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
   # avoid dependency on libstdc++
   if (_gRPC_CORE_NOSTDCXX_FLAGS)
@@ -5835,14 +5823,17 @@ add_executable(algorithm_test
 target_include_directories(algorithm_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(algorithm_test
@@ -5869,14 +5860,17 @@ add_executable(alloc_test
 target_include_directories(alloc_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(alloc_test
@@ -5903,14 +5897,17 @@ add_executable(alpn_test
 target_include_directories(alpn_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(alpn_test
@@ -5937,14 +5934,17 @@ add_executable(arena_test
 target_include_directories(arena_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(arena_test
@@ -5971,14 +5971,17 @@ add_executable(avl_test
 target_include_directories(avl_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(avl_test
@@ -6005,14 +6008,17 @@ add_executable(bad_server_response_test
 target_include_directories(bad_server_response_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(bad_server_response_test
@@ -6040,14 +6046,17 @@ add_executable(bin_decoder_test
 target_include_directories(bin_decoder_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(bin_decoder_test
@@ -6073,14 +6082,17 @@ add_executable(bin_encoder_test
 target_include_directories(bin_encoder_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(bin_encoder_test
@@ -6107,14 +6119,17 @@ add_executable(buffer_list_test
 target_include_directories(buffer_list_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(buffer_list_test
@@ -6142,14 +6157,17 @@ add_executable(channel_create_test
 target_include_directories(channel_create_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(channel_create_test
@@ -6175,14 +6193,17 @@ add_executable(check_epollexclusive
 target_include_directories(check_epollexclusive
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(check_epollexclusive
@@ -6207,14 +6228,17 @@ add_executable(chttp2_hpack_encoder_test
 target_include_directories(chttp2_hpack_encoder_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(chttp2_hpack_encoder_test
@@ -6241,14 +6265,17 @@ add_executable(chttp2_stream_map_test
 target_include_directories(chttp2_stream_map_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(chttp2_stream_map_test
@@ -6275,14 +6302,17 @@ add_executable(chttp2_varint_test
 target_include_directories(chttp2_varint_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(chttp2_varint_test
@@ -6300,6 +6330,45 @@ target_link_libraries(chttp2_varint_test
 
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
+if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
+
+add_executable(close_fd_test
+  test/core/bad_connection/close_fd_test.cc
+)
+
+
+target_include_directories(close_fd_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+)
+
+target_link_libraries(close_fd_test
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc_test_util
+  grpc
+  gpr
+)
+
+  # avoid dependency on libstdc++
+  if (_gRPC_CORE_NOSTDCXX_FLAGS)
+    set_target_properties(close_fd_test PROPERTIES LINKER_LANGUAGE C)
+    target_compile_options(close_fd_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
+  endif()
+
+endif()
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
 
 add_executable(cmdline_test
   test/core/util/cmdline_test.cc
@@ -6309,14 +6378,17 @@ add_executable(cmdline_test
 target_include_directories(cmdline_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(cmdline_test
@@ -6343,14 +6415,17 @@ add_executable(combiner_test
 target_include_directories(combiner_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(combiner_test
@@ -6377,14 +6452,17 @@ add_executable(compression_test
 target_include_directories(compression_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(compression_test
@@ -6411,14 +6489,17 @@ add_executable(concurrent_connectivity_test
 target_include_directories(concurrent_connectivity_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(concurrent_connectivity_test
@@ -6445,14 +6526,17 @@ add_executable(connection_refused_test
 target_include_directories(connection_refused_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(connection_refused_test
@@ -6479,14 +6563,17 @@ add_executable(dns_resolver_connectivity_test
 target_include_directories(dns_resolver_connectivity_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(dns_resolver_connectivity_test
@@ -6505,25 +6592,28 @@ target_link_libraries(dns_resolver_connectivity_test
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
-add_executable(dns_resolver_cooldown_test
+add_executable(dns_resolver_cooldown_using_ares_resolver_test
   test/core/client_channel/resolvers/dns_resolver_cooldown_test.cc
 )
 
 
-target_include_directories(dns_resolver_cooldown_test
+target_include_directories(dns_resolver_cooldown_using_ares_resolver_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
-target_link_libraries(dns_resolver_cooldown_test
+target_link_libraries(dns_resolver_cooldown_using_ares_resolver_test
   ${_gRPC_ALLTARGETS_LIBRARIES}
   grpc_test_util
   grpc
@@ -6532,8 +6622,45 @@ target_link_libraries(dns_resolver_cooldown_test
 
   # avoid dependency on libstdc++
   if (_gRPC_CORE_NOSTDCXX_FLAGS)
-    set_target_properties(dns_resolver_cooldown_test PROPERTIES LINKER_LANGUAGE C)
-    target_compile_options(dns_resolver_cooldown_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
+    set_target_properties(dns_resolver_cooldown_using_ares_resolver_test PROPERTIES LINKER_LANGUAGE C)
+    target_compile_options(dns_resolver_cooldown_using_ares_resolver_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
+  endif()
+
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
+add_executable(dns_resolver_cooldown_using_native_resolver_test
+  test/core/client_channel/resolvers/dns_resolver_cooldown_test.cc
+)
+
+
+target_include_directories(dns_resolver_cooldown_using_native_resolver_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+)
+
+target_link_libraries(dns_resolver_cooldown_using_native_resolver_test
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc_test_util
+  grpc
+  gpr
+)
+
+  # avoid dependency on libstdc++
+  if (_gRPC_CORE_NOSTDCXX_FLAGS)
+    set_target_properties(dns_resolver_cooldown_using_native_resolver_test PROPERTIES LINKER_LANGUAGE C)
+    target_compile_options(dns_resolver_cooldown_using_native_resolver_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
   endif()
 
 endif (gRPC_BUILD_TESTS)
@@ -6547,14 +6674,17 @@ add_executable(dns_resolver_test
 target_include_directories(dns_resolver_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(dns_resolver_test
@@ -6582,14 +6712,17 @@ add_executable(dualstack_socket_test
 target_include_directories(dualstack_socket_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(dualstack_socket_test
@@ -6617,14 +6750,17 @@ add_executable(endpoint_pair_test
 target_include_directories(endpoint_pair_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(endpoint_pair_test
@@ -6651,14 +6787,17 @@ add_executable(error_test
 target_include_directories(error_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(error_test
@@ -6686,14 +6825,17 @@ add_executable(ev_epollex_linux_test
 target_include_directories(ev_epollex_linux_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(ev_epollex_linux_test
@@ -6721,14 +6863,17 @@ add_executable(fake_resolver_test
 target_include_directories(fake_resolver_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(fake_resolver_test
@@ -6757,14 +6902,17 @@ add_executable(fake_transport_security_test
 target_include_directories(fake_transport_security_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(fake_transport_security_test
@@ -6793,14 +6941,17 @@ add_executable(fd_conservation_posix_test
 target_include_directories(fd_conservation_posix_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(fd_conservation_posix_test
@@ -6829,14 +6980,17 @@ add_executable(fd_posix_test
 target_include_directories(fd_posix_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(fd_posix_test
@@ -6864,14 +7018,17 @@ add_executable(fling_client
 target_include_directories(fling_client
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(fling_client
@@ -6898,14 +7055,17 @@ add_executable(fling_server
 target_include_directories(fling_server
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(fling_server
@@ -6933,14 +7093,17 @@ add_executable(fling_stream_test
 target_include_directories(fling_stream_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(fling_stream_test
@@ -6969,14 +7132,17 @@ add_executable(fling_test
 target_include_directories(fling_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(fling_test
@@ -7005,14 +7171,17 @@ add_executable(fork_test
 target_include_directories(fork_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(fork_test
@@ -7041,14 +7210,17 @@ add_executable(goaway_server_test
 target_include_directories(goaway_server_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(goaway_server_test
@@ -7076,14 +7248,17 @@ add_executable(gpr_cpu_test
 target_include_directories(gpr_cpu_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(gpr_cpu_test
@@ -7110,14 +7285,17 @@ add_executable(gpr_env_test
 target_include_directories(gpr_env_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(gpr_env_test
@@ -7137,21 +7315,24 @@ endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
 add_executable(gpr_host_port_test
-  test/core/gpr/host_port_test.cc
+  test/core/gprpp/host_port_test.cc
 )
 
 
 target_include_directories(gpr_host_port_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(gpr_host_port_test
@@ -7178,14 +7359,17 @@ add_executable(gpr_log_test
 target_include_directories(gpr_log_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(gpr_log_test
@@ -7212,14 +7396,17 @@ add_executable(gpr_manual_constructor_test
 target_include_directories(gpr_manual_constructor_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(gpr_manual_constructor_test
@@ -7246,14 +7433,17 @@ add_executable(gpr_mpscq_test
 target_include_directories(gpr_mpscq_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(gpr_mpscq_test
@@ -7280,14 +7470,17 @@ add_executable(gpr_spinlock_test
 target_include_directories(gpr_spinlock_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(gpr_spinlock_test
@@ -7314,14 +7507,17 @@ add_executable(gpr_string_test
 target_include_directories(gpr_string_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(gpr_string_test
@@ -7348,14 +7544,17 @@ add_executable(gpr_sync_test
 target_include_directories(gpr_sync_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(gpr_sync_test
@@ -7382,14 +7581,17 @@ add_executable(gpr_thd_test
 target_include_directories(gpr_thd_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(gpr_thd_test
@@ -7416,14 +7618,17 @@ add_executable(gpr_time_test
 target_include_directories(gpr_time_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(gpr_time_test
@@ -7450,14 +7655,17 @@ add_executable(gpr_tls_test
 target_include_directories(gpr_tls_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(gpr_tls_test
@@ -7484,14 +7692,17 @@ add_executable(gpr_useful_test
 target_include_directories(gpr_useful_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(gpr_useful_test
@@ -7518,14 +7729,17 @@ add_executable(grpc_auth_context_test
 target_include_directories(grpc_auth_context_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(grpc_auth_context_test
@@ -7552,14 +7766,17 @@ add_executable(grpc_b64_test
 target_include_directories(grpc_b64_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(grpc_b64_test
@@ -7586,14 +7803,17 @@ add_executable(grpc_byte_buffer_reader_test
 target_include_directories(grpc_byte_buffer_reader_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(grpc_byte_buffer_reader_test
@@ -7620,14 +7840,17 @@ add_executable(grpc_channel_args_test
 target_include_directories(grpc_channel_args_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(grpc_channel_args_test
@@ -7654,14 +7877,17 @@ add_executable(grpc_channel_stack_builder_test
 target_include_directories(grpc_channel_stack_builder_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(grpc_channel_stack_builder_test
@@ -7688,14 +7914,17 @@ add_executable(grpc_channel_stack_test
 target_include_directories(grpc_channel_stack_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(grpc_channel_stack_test
@@ -7722,14 +7951,17 @@ add_executable(grpc_completion_queue_test
 target_include_directories(grpc_completion_queue_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(grpc_completion_queue_test
@@ -7756,14 +7988,17 @@ add_executable(grpc_completion_queue_threading_test
 target_include_directories(grpc_completion_queue_threading_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(grpc_completion_queue_threading_test
@@ -7780,6 +8015,43 @@ target_link_libraries(grpc_completion_queue_threading_test
   endif()
 
 endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
+add_executable(grpc_control_plane_credentials_test
+  test/core/security/control_plane_credentials_test.cc
+)
+
+
+target_include_directories(grpc_control_plane_credentials_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+)
+
+target_link_libraries(grpc_control_plane_credentials_test
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc_test_util
+  grpc
+  gpr
+)
+
+  # avoid dependency on libstdc++
+  if (_gRPC_CORE_NOSTDCXX_FLAGS)
+    set_target_properties(grpc_control_plane_credentials_test PROPERTIES LINKER_LANGUAGE C)
+    target_compile_options(grpc_control_plane_credentials_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
+  endif()
+
+endif (gRPC_BUILD_TESTS)
 
 add_executable(grpc_create_jwt
   test/core/security/create_jwt.cc
@@ -7790,14 +8062,17 @@ add_executable(grpc_create_jwt
 target_include_directories(grpc_create_jwt
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(grpc_create_jwt
@@ -7823,14 +8098,17 @@ add_executable(grpc_credentials_test
 target_include_directories(grpc_credentials_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(grpc_credentials_test
@@ -7849,40 +8127,6 @@ target_link_libraries(grpc_credentials_test
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
-add_executable(grpc_fetch_oauth2
-  test/core/security/fetch_oauth2.cc
-)
-
-
-target_include_directories(grpc_fetch_oauth2
-  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
-  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
-  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
-  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
-  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
-)
-
-target_link_libraries(grpc_fetch_oauth2
-  ${_gRPC_ALLTARGETS_LIBRARIES}
-  grpc_test_util
-  grpc
-  gpr
-)
-
-  # avoid dependency on libstdc++
-  if (_gRPC_CORE_NOSTDCXX_FLAGS)
-    set_target_properties(grpc_fetch_oauth2 PROPERTIES LINKER_LANGUAGE C)
-    target_compile_options(grpc_fetch_oauth2 PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
-  endif()
-
-endif (gRPC_BUILD_TESTS)
-if (gRPC_BUILD_TESTS)
-
 add_executable(grpc_ipv6_loopback_available_test
   test/core/iomgr/grpc_ipv6_loopback_available_test.cc
 )
@@ -7891,14 +8135,17 @@ add_executable(grpc_ipv6_loopback_available_test
 target_include_directories(grpc_ipv6_loopback_available_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(grpc_ipv6_loopback_available_test
@@ -7926,14 +8173,17 @@ add_executable(grpc_json_token_test
 target_include_directories(grpc_json_token_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(grpc_json_token_test
@@ -7961,14 +8211,17 @@ add_executable(grpc_jwt_verifier_test
 target_include_directories(grpc_jwt_verifier_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(grpc_jwt_verifier_test
@@ -7995,14 +8248,17 @@ add_executable(grpc_print_google_default_creds_token
 target_include_directories(grpc_print_google_default_creds_token
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(grpc_print_google_default_creds_token
@@ -8027,14 +8283,17 @@ add_executable(grpc_security_connector_test
 target_include_directories(grpc_security_connector_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(grpc_security_connector_test
@@ -8061,14 +8320,17 @@ add_executable(grpc_ssl_credentials_test
 target_include_directories(grpc_ssl_credentials_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(grpc_ssl_credentials_test
@@ -8095,14 +8357,17 @@ add_executable(grpc_verify_jwt
 target_include_directories(grpc_verify_jwt
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(grpc_verify_jwt
@@ -8128,14 +8393,17 @@ add_executable(handshake_client_ssl
 target_include_directories(handshake_client_ssl
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(handshake_client_ssl
@@ -8166,14 +8434,17 @@ add_executable(handshake_server_ssl
 target_include_directories(handshake_server_ssl
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(handshake_server_ssl
@@ -8204,14 +8475,17 @@ add_executable(handshake_server_with_readahead_handshaker
 target_include_directories(handshake_server_with_readahead_handshaker
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(handshake_server_with_readahead_handshaker
@@ -8241,14 +8515,17 @@ add_executable(handshake_verify_peer_options
 target_include_directories(handshake_verify_peer_options
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(handshake_verify_peer_options
@@ -8277,14 +8554,17 @@ add_executable(histogram_test
 target_include_directories(histogram_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(histogram_test
@@ -8310,14 +8590,17 @@ add_executable(hpack_parser_test
 target_include_directories(hpack_parser_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(hpack_parser_test
@@ -8344,14 +8627,17 @@ add_executable(hpack_table_test
 target_include_directories(hpack_table_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(hpack_table_test
@@ -8378,14 +8664,17 @@ add_executable(http_parser_test
 target_include_directories(http_parser_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(http_parser_test
@@ -8412,14 +8701,17 @@ add_executable(httpcli_format_request_test
 target_include_directories(httpcli_format_request_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(httpcli_format_request_test
@@ -8447,14 +8739,17 @@ add_executable(httpcli_test
 target_include_directories(httpcli_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(httpcli_test
@@ -8483,14 +8778,17 @@ add_executable(httpscli_test
 target_include_directories(httpscli_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(httpscli_test
@@ -8518,14 +8816,17 @@ add_executable(init_test
 target_include_directories(init_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(init_test
@@ -8552,14 +8853,17 @@ add_executable(inproc_callback_test
 target_include_directories(inproc_callback_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(inproc_callback_test
@@ -8586,14 +8890,17 @@ add_executable(invalid_call_argument_test
 target_include_directories(invalid_call_argument_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(invalid_call_argument_test
@@ -8620,14 +8927,17 @@ add_executable(json_rewrite
 target_include_directories(json_rewrite
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(json_rewrite
@@ -8654,14 +8964,17 @@ add_executable(json_rewrite_test
 target_include_directories(json_rewrite_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(json_rewrite_test
@@ -8688,14 +9001,17 @@ add_executable(json_stream_error_test
 target_include_directories(json_stream_error_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(json_stream_error_test
@@ -8722,14 +9038,17 @@ add_executable(json_test
 target_include_directories(json_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(json_test
@@ -8756,14 +9075,17 @@ add_executable(lame_client_test
 target_include_directories(lame_client_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(lame_client_test
@@ -8790,14 +9112,17 @@ add_executable(load_file_test
 target_include_directories(load_file_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(load_file_test
@@ -8824,14 +9149,17 @@ add_executable(memory_usage_client
 target_include_directories(memory_usage_client
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(memory_usage_client
@@ -8858,14 +9186,17 @@ add_executable(memory_usage_server
 target_include_directories(memory_usage_server
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(memory_usage_server
@@ -8893,14 +9224,17 @@ add_executable(memory_usage_test
 target_include_directories(memory_usage_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(memory_usage_test
@@ -8928,14 +9262,17 @@ add_executable(message_compress_test
 target_include_directories(message_compress_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(message_compress_test
@@ -8962,14 +9299,17 @@ add_executable(minimal_stack_is_minimal_test
 target_include_directories(minimal_stack_is_minimal_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(minimal_stack_is_minimal_test
@@ -8988,6 +9328,43 @@ target_link_libraries(minimal_stack_is_minimal_test
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
+add_executable(mpmcqueue_test
+  test/core/iomgr/mpmcqueue_test.cc
+)
+
+
+target_include_directories(mpmcqueue_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+)
+
+target_link_libraries(mpmcqueue_test
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc_test_util
+  grpc
+  gpr
+)
+
+  # avoid dependency on libstdc++
+  if (_gRPC_CORE_NOSTDCXX_FLAGS)
+    set_target_properties(mpmcqueue_test PROPERTIES LINKER_LANGUAGE C)
+    target_compile_options(mpmcqueue_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
+  endif()
+
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
 add_executable(multiple_server_queues_test
   test/core/end2end/multiple_server_queues_test.cc
 )
@@ -8996,14 +9373,17 @@ add_executable(multiple_server_queues_test
 target_include_directories(multiple_server_queues_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(multiple_server_queues_test
@@ -9030,14 +9410,17 @@ add_executable(murmur_hash_test
 target_include_directories(murmur_hash_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(murmur_hash_test
@@ -9064,14 +9447,17 @@ add_executable(no_server_test
 target_include_directories(no_server_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(no_server_test
@@ -9098,14 +9484,17 @@ add_executable(num_external_connectivity_watchers_test
 target_include_directories(num_external_connectivity_watchers_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(num_external_connectivity_watchers_test
@@ -9132,14 +9521,17 @@ add_executable(parse_address_test
 target_include_directories(parse_address_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(parse_address_test
@@ -9167,14 +9559,17 @@ add_executable(parse_address_with_named_scope_id_test
 target_include_directories(parse_address_with_named_scope_id_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(parse_address_with_named_scope_id_test
@@ -9202,14 +9597,17 @@ add_executable(percent_encoding_test
 target_include_directories(percent_encoding_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(percent_encoding_test
@@ -9237,14 +9635,17 @@ add_executable(resolve_address_using_ares_resolver_posix_test
 target_include_directories(resolve_address_using_ares_resolver_posix_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(resolve_address_using_ares_resolver_posix_test
@@ -9272,14 +9673,17 @@ add_executable(resolve_address_using_ares_resolver_test
 target_include_directories(resolve_address_using_ares_resolver_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(resolve_address_using_ares_resolver_test
@@ -9307,14 +9711,17 @@ add_executable(resolve_address_using_native_resolver_posix_test
 target_include_directories(resolve_address_using_native_resolver_posix_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(resolve_address_using_native_resolver_posix_test
@@ -9342,14 +9749,17 @@ add_executable(resolve_address_using_native_resolver_test
 target_include_directories(resolve_address_using_native_resolver_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(resolve_address_using_native_resolver_test
@@ -9376,14 +9786,17 @@ add_executable(resource_quota_test
 target_include_directories(resource_quota_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(resource_quota_test
@@ -9410,14 +9823,17 @@ add_executable(secure_channel_create_test
 target_include_directories(secure_channel_create_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(secure_channel_create_test
@@ -9444,14 +9860,17 @@ add_executable(secure_endpoint_test
 target_include_directories(secure_endpoint_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(secure_endpoint_test
@@ -9478,14 +9897,17 @@ add_executable(sequential_connectivity_test
 target_include_directories(sequential_connectivity_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(sequential_connectivity_test
@@ -9512,14 +9934,17 @@ add_executable(server_chttp2_test
 target_include_directories(server_chttp2_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(server_chttp2_test
@@ -9546,14 +9971,17 @@ add_executable(server_test
 target_include_directories(server_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(server_test
@@ -9580,14 +10008,17 @@ add_executable(slice_buffer_test
 target_include_directories(slice_buffer_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(slice_buffer_test
@@ -9614,14 +10045,17 @@ add_executable(slice_string_helpers_test
 target_include_directories(slice_string_helpers_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(slice_string_helpers_test
@@ -9648,14 +10082,17 @@ add_executable(slice_test
 target_include_directories(slice_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(slice_test
@@ -9682,14 +10119,17 @@ add_executable(sockaddr_resolver_test
 target_include_directories(sockaddr_resolver_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(sockaddr_resolver_test
@@ -9716,14 +10156,17 @@ add_executable(sockaddr_utils_test
 target_include_directories(sockaddr_utils_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(sockaddr_utils_test
@@ -9751,14 +10194,17 @@ add_executable(socket_utils_test
 target_include_directories(socket_utils_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(socket_utils_test
@@ -9788,14 +10234,17 @@ add_executable(ssl_transport_security_test
 target_include_directories(ssl_transport_security_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(ssl_transport_security_test
@@ -9823,14 +10272,17 @@ add_executable(status_conversion_test
 target_include_directories(status_conversion_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(status_conversion_test
@@ -9857,14 +10309,17 @@ add_executable(stream_compression_test
 target_include_directories(stream_compression_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(stream_compression_test
@@ -9891,14 +10346,17 @@ add_executable(stream_owned_slice_test
 target_include_directories(stream_owned_slice_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(stream_owned_slice_test
@@ -9926,14 +10384,17 @@ add_executable(tcp_client_posix_test
 target_include_directories(tcp_client_posix_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(tcp_client_posix_test
@@ -9961,14 +10422,17 @@ add_executable(tcp_client_uv_test
 target_include_directories(tcp_client_uv_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(tcp_client_uv_test
@@ -9996,14 +10460,17 @@ add_executable(tcp_posix_test
 target_include_directories(tcp_posix_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(tcp_posix_test
@@ -10032,14 +10499,17 @@ add_executable(tcp_server_posix_test
 target_include_directories(tcp_server_posix_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(tcp_server_posix_test
@@ -10067,14 +10537,17 @@ add_executable(tcp_server_uv_test
 target_include_directories(tcp_server_uv_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(tcp_server_uv_test
@@ -10093,6 +10566,43 @@ target_link_libraries(tcp_server_uv_test
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
+add_executable(threadpool_test
+  test/core/iomgr/threadpool_test.cc
+)
+
+
+target_include_directories(threadpool_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+)
+
+target_link_libraries(threadpool_test
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc_test_util
+  grpc
+  gpr
+)
+
+  # avoid dependency on libstdc++
+  if (_gRPC_CORE_NOSTDCXX_FLAGS)
+    set_target_properties(threadpool_test PROPERTIES LINKER_LANGUAGE C)
+    target_compile_options(threadpool_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
+  endif()
+
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
 add_executable(time_averaged_stats_test
   test/core/iomgr/time_averaged_stats_test.cc
 )
@@ -10101,14 +10611,17 @@ add_executable(time_averaged_stats_test
 target_include_directories(time_averaged_stats_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(time_averaged_stats_test
@@ -10135,14 +10648,17 @@ add_executable(timeout_encoding_test
 target_include_directories(timeout_encoding_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(timeout_encoding_test
@@ -10169,14 +10685,17 @@ add_executable(timer_heap_test
 target_include_directories(timer_heap_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(timer_heap_test
@@ -10203,14 +10722,17 @@ add_executable(timer_list_test
 target_include_directories(timer_list_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(timer_list_test
@@ -10237,14 +10759,17 @@ add_executable(transport_connectivity_state_test
 target_include_directories(transport_connectivity_state_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(transport_connectivity_state_test
@@ -10271,14 +10796,17 @@ add_executable(transport_metadata_test
 target_include_directories(transport_metadata_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(transport_metadata_test
@@ -10306,14 +10834,17 @@ add_executable(transport_security_test
 target_include_directories(transport_security_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(transport_security_test
@@ -10342,14 +10873,17 @@ add_executable(udp_server_test
 target_include_directories(udp_server_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(udp_server_test
@@ -10377,14 +10911,17 @@ add_executable(uri_parser_test
 target_include_directories(uri_parser_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(uri_parser_test
@@ -10402,42 +10939,6 @@ target_link_libraries(uri_parser_test
 
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
-if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
-
-add_executable(wakeup_fd_cv_test
-  test/core/iomgr/wakeup_fd_cv_test.cc
-)
-
-
-target_include_directories(wakeup_fd_cv_test
-  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
-  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
-  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
-  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
-  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
-)
-
-target_link_libraries(wakeup_fd_cv_test
-  ${_gRPC_ALLTARGETS_LIBRARIES}
-  grpc_test_util
-  grpc
-  gpr
-)
-
-  # avoid dependency on libstdc++
-  if (_gRPC_CORE_NOSTDCXX_FLAGS)
-    set_target_properties(wakeup_fd_cv_test PROPERTIES LINKER_LANGUAGE C)
-    target_compile_options(wakeup_fd_cv_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
-  endif()
-
-endif()
-endif (gRPC_BUILD_TESTS)
-if (gRPC_BUILD_TESTS)
 
 add_executable(alarm_test
   test/cpp/common/alarm_test.cc
@@ -10449,14 +10950,17 @@ add_executable(alarm_test
 target_include_directories(alarm_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -10489,14 +10993,17 @@ add_executable(alts_counter_test
 target_include_directories(alts_counter_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -10527,14 +11034,17 @@ add_executable(alts_crypt_test
 target_include_directories(alts_crypt_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -10566,14 +11076,17 @@ add_executable(alts_crypter_test
 target_include_directories(alts_crypter_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -10604,14 +11117,17 @@ add_executable(alts_frame_handler_test
 target_include_directories(alts_frame_handler_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -10643,14 +11159,17 @@ add_executable(alts_frame_protector_test
 target_include_directories(alts_frame_protector_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -10681,14 +11200,17 @@ add_executable(alts_grpc_record_protocol_test
 target_include_directories(alts_grpc_record_protocol_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -10719,14 +11241,17 @@ add_executable(alts_handshaker_client_test
 target_include_directories(alts_handshaker_client_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -10757,14 +11282,17 @@ add_executable(alts_handshaker_service_api_test
 target_include_directories(alts_handshaker_service_api_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -10795,14 +11323,17 @@ add_executable(alts_iovec_record_protocol_test
 target_include_directories(alts_iovec_record_protocol_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -10833,14 +11364,17 @@ add_executable(alts_security_connector_test
 target_include_directories(alts_security_connector_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -10870,14 +11404,17 @@ add_executable(alts_tsi_handshaker_test
 target_include_directories(alts_tsi_handshaker_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -10908,14 +11445,17 @@ add_executable(alts_tsi_utils_test
 target_include_directories(alts_tsi_utils_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -10946,14 +11486,17 @@ add_executable(alts_zero_copy_grpc_protector_test
 target_include_directories(alts_zero_copy_grpc_protector_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -10984,14 +11527,17 @@ add_executable(async_end2end_test
 target_include_directories(async_end2end_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11024,14 +11570,17 @@ add_executable(auth_property_iterator_test
 target_include_directories(auth_property_iterator_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11064,14 +11613,17 @@ add_executable(backoff_test
 target_include_directories(backoff_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11102,14 +11654,17 @@ add_executable(bdp_estimator_test
 target_include_directories(bdp_estimator_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11133,6 +11688,54 @@ endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
 
+add_executable(bm_alarm
+  test/cpp/microbenchmarks/bm_alarm.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
+)
+
+
+target_include_directories(bm_alarm
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+
+target_link_libraries(bm_alarm
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc_benchmark
+  ${_gRPC_BENCHMARK_LIBRARIES}
+  grpc++_test_util_unsecure
+  grpc_test_util_unsecure
+  grpc++_unsecure
+  grpc_unsecure
+  gpr
+  grpc++_test_config
+  ${_gRPC_GFLAGS_LIBRARIES}
+)
+
+
+endif()
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
+
 add_executable(bm_arena
   test/cpp/microbenchmarks/bm_arena.cc
   third_party/googletest/googletest/src/gtest-all.cc
@@ -11143,14 +11746,17 @@ add_executable(bm_arena
 target_include_directories(bm_arena
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11188,14 +11794,17 @@ add_executable(bm_byte_buffer
 target_include_directories(bm_byte_buffer
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11233,14 +11842,17 @@ add_executable(bm_call_create
 target_include_directories(bm_call_create
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11268,6 +11880,104 @@ endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
 
+add_executable(bm_callback_streaming_ping_pong
+  test/cpp/microbenchmarks/bm_callback_streaming_ping_pong.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
+)
+
+
+target_include_directories(bm_callback_streaming_ping_pong
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+
+target_link_libraries(bm_callback_streaming_ping_pong
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc_benchmark
+  ${_gRPC_BENCHMARK_LIBRARIES}
+  grpc++_test_util_unsecure
+  grpc_test_util_unsecure
+  grpc++_unsecure
+  grpc_unsecure
+  gpr
+  grpc++_test_config
+  bm_callback_test_service_impl
+  ${_gRPC_GFLAGS_LIBRARIES}
+)
+
+
+endif()
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
+
+add_executable(bm_callback_unary_ping_pong
+  test/cpp/microbenchmarks/bm_callback_unary_ping_pong.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
+)
+
+
+target_include_directories(bm_callback_unary_ping_pong
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+
+target_link_libraries(bm_callback_unary_ping_pong
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc_benchmark
+  ${_gRPC_BENCHMARK_LIBRARIES}
+  grpc++_test_util_unsecure
+  grpc_test_util_unsecure
+  grpc++_unsecure
+  grpc_unsecure
+  gpr
+  grpc++_test_config
+  bm_callback_test_service_impl
+  ${_gRPC_GFLAGS_LIBRARIES}
+)
+
+
+endif()
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
+
 add_executable(bm_channel
   test/cpp/microbenchmarks/bm_channel.cc
   third_party/googletest/googletest/src/gtest-all.cc
@@ -11278,14 +11988,17 @@ add_executable(bm_channel
 target_include_directories(bm_channel
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11323,14 +12036,17 @@ add_executable(bm_chttp2_hpack
 target_include_directories(bm_chttp2_hpack
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11368,14 +12084,17 @@ add_executable(bm_chttp2_transport
 target_include_directories(bm_chttp2_transport
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11413,14 +12132,17 @@ add_executable(bm_closure
 target_include_directories(bm_closure
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11458,14 +12180,17 @@ add_executable(bm_cq
 target_include_directories(bm_cq
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11503,14 +12228,17 @@ add_executable(bm_cq_multiple_threads
 target_include_directories(bm_cq_multiple_threads
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11548,14 +12276,17 @@ add_executable(bm_error
 target_include_directories(bm_error
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11593,14 +12324,17 @@ add_executable(bm_fullstack_streaming_ping_pong
 target_include_directories(bm_fullstack_streaming_ping_pong
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11638,14 +12372,17 @@ add_executable(bm_fullstack_streaming_pump
 target_include_directories(bm_fullstack_streaming_pump
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11683,14 +12420,17 @@ add_executable(bm_fullstack_trickle
 target_include_directories(bm_fullstack_trickle
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11728,14 +12468,17 @@ add_executable(bm_fullstack_unary_ping_pong
 target_include_directories(bm_fullstack_unary_ping_pong
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11773,14 +12516,17 @@ add_executable(bm_metadata
 target_include_directories(bm_metadata
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11818,14 +12564,17 @@ add_executable(bm_pollset
 target_include_directories(bm_pollset
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11834,6 +12583,54 @@ target_include_directories(bm_pollset
 )
 
 target_link_libraries(bm_pollset
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc_benchmark
+  ${_gRPC_BENCHMARK_LIBRARIES}
+  grpc++_test_util_unsecure
+  grpc_test_util_unsecure
+  grpc++_unsecure
+  grpc_unsecure
+  gpr
+  grpc++_test_config
+  ${_gRPC_GFLAGS_LIBRARIES}
+)
+
+
+endif()
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
+
+add_executable(bm_threadpool
+  test/cpp/microbenchmarks/bm_threadpool.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
+)
+
+
+target_include_directories(bm_threadpool
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+
+target_link_libraries(bm_threadpool
   ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
   grpc_benchmark
@@ -11863,14 +12660,17 @@ add_executable(bm_timer
 target_include_directories(bm_timer
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11907,14 +12707,17 @@ add_executable(byte_stream_test
 target_include_directories(byte_stream_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11945,14 +12748,17 @@ add_executable(channel_arguments_test
 target_include_directories(channel_arguments_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -11983,14 +12789,17 @@ add_executable(channel_filter_test
 target_include_directories(channel_filter_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12028,14 +12837,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(channel_trace_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12068,14 +12880,17 @@ add_executable(channelz_registry_test
 target_include_directories(channelz_registry_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12115,14 +12930,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(channelz_service_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12163,14 +12981,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(channelz_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12203,14 +13024,17 @@ add_executable(check_gcp_environment_linux_test
 target_include_directories(check_gcp_environment_linux_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12240,14 +13064,17 @@ add_executable(check_gcp_environment_windows_test
 target_include_directories(check_gcp_environment_windows_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12277,14 +13104,17 @@ add_executable(chttp2_settings_timeout_test
 target_include_directories(chttp2_settings_timeout_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12315,14 +13145,17 @@ add_executable(cli_call_test
 target_include_directories(cli_call_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12348,6 +13181,7 @@ if (gRPC_BUILD_TESTS)
 
 add_executable(client_callback_end2end_test
   test/cpp/end2end/client_callback_end2end_test.cc
+  test/cpp/end2end/interceptors_util.cc
   third_party/googletest/googletest/src/gtest-all.cc
   third_party/googletest/googlemock/src/gmock-all.cc
 )
@@ -12356,14 +13190,17 @@ add_executable(client_callback_end2end_test
 target_include_directories(client_callback_end2end_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12403,14 +13240,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(client_channel_stress_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12444,14 +13284,17 @@ add_executable(client_crash_test
 target_include_directories(client_crash_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12485,14 +13328,17 @@ add_executable(client_crash_test_server
 target_include_directories(client_crash_test_server
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12503,6 +13349,7 @@ target_include_directories(client_crash_test_server
 target_link_libraries(client_crash_test_server
   ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc++_test_config
   grpc++_test_util
   grpc_test_util
   grpc++
@@ -12526,14 +13373,17 @@ add_executable(client_interceptors_end2end_test
 target_include_directories(client_interceptors_end2end_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12566,14 +13416,17 @@ add_executable(client_lb_end2end_test
 target_include_directories(client_lb_end2end_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12655,14 +13508,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(codegen_test_full
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12744,14 +13600,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(codegen_test_minimal
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12782,14 +13641,17 @@ add_executable(context_list_test
 target_include_directories(context_list_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12820,14 +13682,17 @@ add_executable(credentials_test
 target_include_directories(credentials_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12858,14 +13723,17 @@ add_executable(cxx_byte_buffer_test
 target_include_directories(cxx_byte_buffer_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12897,14 +13765,17 @@ add_executable(cxx_slice_test
 target_include_directories(cxx_slice_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12936,14 +13807,17 @@ add_executable(cxx_string_ref_test
 target_include_directories(cxx_string_ref_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12973,14 +13847,17 @@ add_executable(cxx_time_test
 target_include_directories(cxx_time_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -12991,6 +13868,49 @@ target_include_directories(cxx_time_test
 target_link_libraries(cxx_time_test
   ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc_test_util
+  grpc++
+  grpc
+  gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
+)
+
+
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
+add_executable(delegating_channel_test
+  test/cpp/end2end/delegating_channel_test.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
+)
+
+
+target_include_directories(delegating_channel_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+
+target_link_libraries(delegating_channel_test
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc++_test_util
   grpc_test_util
   grpc++
   grpc
@@ -13013,14 +13933,17 @@ add_executable(end2end_test
 target_include_directories(end2end_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -13060,14 +13983,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(error_details_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -13097,14 +14023,17 @@ add_executable(exception_test
 target_include_directories(exception_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -13137,14 +14066,17 @@ add_executable(filter_end2end_test
 target_include_directories(filter_end2end_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -13177,14 +14109,17 @@ add_executable(generic_end2end_test
 target_include_directories(generic_end2end_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -13200,6 +14135,86 @@ target_link_libraries(generic_end2end_test
   grpc++
   grpc
   gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
+)
+
+
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
+add_executable(global_config_env_test
+  test/core/gprpp/global_config_env_test.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
+)
+
+
+target_include_directories(global_config_env_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+
+target_link_libraries(global_config_env_test
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  gpr
+  grpc_test_util_unsecure
+  ${_gRPC_GFLAGS_LIBRARIES}
+)
+
+
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
+add_executable(global_config_test
+  test/core/gprpp/global_config_test.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
+)
+
+
+target_include_directories(global_config_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+
+target_link_libraries(global_config_test
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  gpr
+  grpc_test_util_unsecure
   ${_gRPC_GFLAGS_LIBRARIES}
 )
 
@@ -13224,14 +14239,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(golden_file_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -13242,6 +14260,7 @@ target_include_directories(golden_file_test
 target_link_libraries(golden_file_test
   ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc++_test_config
   grpc++
   grpc
   gpr
@@ -13262,14 +14281,17 @@ add_executable(grpc_alts_credentials_options_test
 target_include_directories(grpc_alts_credentials_options_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -13299,14 +14321,17 @@ add_executable(grpc_cli
 target_include_directories(grpc_cli
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -13328,6 +14353,48 @@ target_link_libraries(grpc_cli
 
 
 endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
+add_executable(grpc_core_map_test
+  test/core/gprpp/map_test.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
+)
+
+
+target_include_directories(grpc_core_map_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+
+target_link_libraries(grpc_core_map_test
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc_test_util
+  grpc++
+  grpc
+  gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
+)
+
+
+endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_CODEGEN)
 
 add_executable(grpc_cpp_plugin
@@ -13338,14 +14405,17 @@ add_executable(grpc_cpp_plugin
 target_include_directories(grpc_cpp_plugin
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 
@@ -13377,14 +14447,17 @@ add_executable(grpc_csharp_plugin
 target_include_directories(grpc_csharp_plugin
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 
@@ -13408,6 +14481,48 @@ endif()
 endif (gRPC_BUILD_CODEGEN)
 if (gRPC_BUILD_TESTS)
 
+add_executable(grpc_fetch_oauth2
+  test/core/security/fetch_oauth2.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
+)
+
+
+target_include_directories(grpc_fetch_oauth2
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+
+target_link_libraries(grpc_fetch_oauth2
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc_test_util
+  grpc++
+  grpc
+  gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
+)
+
+
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
 add_executable(grpc_linux_system_roots_test
   test/core/security/linux_system_roots_test.cc
   third_party/googletest/googletest/src/gtest-all.cc
@@ -13418,14 +14533,17 @@ add_executable(grpc_linux_system_roots_test
 target_include_directories(grpc_linux_system_roots_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -13454,14 +14572,17 @@ add_executable(grpc_node_plugin
 target_include_directories(grpc_node_plugin
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 
@@ -13493,14 +14614,17 @@ add_executable(grpc_objective_c_plugin
 target_include_directories(grpc_objective_c_plugin
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 
@@ -13532,14 +14656,17 @@ add_executable(grpc_php_plugin
 target_include_directories(grpc_php_plugin
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 
@@ -13571,14 +14698,17 @@ add_executable(grpc_python_plugin
 target_include_directories(grpc_python_plugin
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 
@@ -13610,14 +14740,17 @@ add_executable(grpc_ruby_plugin
 target_include_directories(grpc_ruby_plugin
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 
@@ -13665,14 +14798,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(grpc_tool_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -13715,14 +14851,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(grpclb_api_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -13761,14 +14900,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(grpclb_end2end_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -13790,6 +14932,73 @@ target_link_libraries(grpclb_end2end_test
 
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
+if(_gRPC_PLATFORM_LINUX)
+
+add_executable(grpclb_fallback_test
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/testing/empty.pb.cc
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/testing/empty.grpc.pb.cc
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/testing/empty.pb.h
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/testing/empty.grpc.pb.h
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/testing/messages.pb.cc
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/testing/messages.grpc.pb.cc
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/testing/messages.pb.h
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/testing/messages.grpc.pb.h
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/testing/test.pb.cc
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/testing/test.grpc.pb.cc
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/testing/test.pb.h
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/testing/test.grpc.pb.h
+  test/cpp/interop/grpclb_fallback_test.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
+)
+
+protobuf_generate_grpc_cpp(
+  src/proto/grpc/testing/empty.proto
+)
+protobuf_generate_grpc_cpp(
+  src/proto/grpc/testing/messages.proto
+)
+protobuf_generate_grpc_cpp(
+  src/proto/grpc/testing/test.proto
+)
+
+target_include_directories(grpclb_fallback_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+
+target_link_libraries(grpclb_fallback_test
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc++_test_util
+  grpc_test_util
+  grpc++
+  grpc
+  gpr
+  grpc++_test_config
+  ${_gRPC_GFLAGS_LIBRARIES}
+)
+
+
+endif()
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
 
 add_executable(h2_ssl_cert_test
   test/core/end2end/h2_ssl_cert_test.cc
@@ -13801,14 +15010,17 @@ add_executable(h2_ssl_cert_test
 target_include_directories(h2_ssl_cert_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -13840,14 +15052,17 @@ add_executable(h2_ssl_session_reuse_test
 target_include_directories(h2_ssl_session_reuse_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -13879,14 +15094,17 @@ add_executable(health_service_end2end_test
 target_include_directories(health_service_end2end_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -13919,14 +15137,17 @@ add_executable(http2_client
 target_include_directories(http2_client
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -13961,14 +15182,17 @@ add_executable(hybrid_end2end_test
 target_include_directories(hybrid_end2end_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14001,14 +15225,17 @@ add_executable(inlined_vector_test
 target_include_directories(inlined_vector_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14041,14 +15268,17 @@ add_executable(inproc_sync_unary_ping_pong_test
 target_include_directories(inproc_sync_unary_ping_pong_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14085,14 +15315,17 @@ add_executable(interop_client
 target_include_directories(interop_client
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14129,14 +15362,17 @@ add_executable(interop_server
 target_include_directories(interop_server
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14175,14 +15411,17 @@ add_executable(interop_test
 target_include_directories(interop_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14216,14 +15455,17 @@ add_executable(json_run_localhost
 target_include_directories(json_run_localhost
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14258,14 +15500,17 @@ add_executable(memory_test
 target_include_directories(memory_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14276,6 +15521,49 @@ target_include_directories(memory_test
 target_link_libraries(memory_test
   ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc_test_util
+  grpc++
+  grpc
+  gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
+)
+
+
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
+add_executable(message_allocator_end2end_test
+  test/cpp/end2end/message_allocator_end2end_test.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
+)
+
+
+target_include_directories(message_allocator_end2end_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+
+target_link_libraries(message_allocator_end2end_test
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc++_test_util
   grpc_test_util
   grpc++
   grpc
@@ -14304,14 +15592,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(metrics_client
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14343,14 +15634,17 @@ add_executable(mock_test
 target_include_directories(mock_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14383,14 +15677,17 @@ add_executable(nonblocking_test
 target_include_directories(nonblocking_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14423,14 +15720,17 @@ add_executable(noop-benchmark
 target_include_directories(noop-benchmark
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14459,14 +15759,17 @@ add_executable(optional_test
 target_include_directories(optional_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14498,14 +15801,17 @@ add_executable(orphanable_test
 target_include_directories(orphanable_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14527,6 +15833,50 @@ target_link_libraries(orphanable_test
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
+add_executable(port_sharing_end2end_test
+  test/cpp/end2end/port_sharing_end2end_test.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
+)
+
+
+target_include_directories(port_sharing_end2end_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+
+target_link_libraries(port_sharing_end2end_test
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  test_tcp_server
+  grpc++_test_util
+  grpc_test_util
+  grpc++
+  grpc
+  gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
+)
+
+
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
 add_executable(proto_server_reflection_test
   test/cpp/end2end/proto_server_reflection_test.cc
   third_party/googletest/googletest/src/gtest-all.cc
@@ -14537,14 +15887,17 @@ add_executable(proto_server_reflection_test
 target_include_directories(proto_server_reflection_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14579,14 +15932,17 @@ add_executable(proto_utils_test
 target_include_directories(proto_utils_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14617,14 +15973,17 @@ add_executable(qps_interarrival_test
 target_include_directories(qps_interarrival_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14660,14 +16019,17 @@ add_executable(qps_json_driver
 target_include_directories(qps_json_driver
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14704,14 +16066,17 @@ add_executable(qps_openloop_test
 target_include_directories(qps_openloop_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14748,14 +16113,17 @@ add_executable(qps_worker
 target_include_directories(qps_worker
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14791,14 +16159,17 @@ add_executable(raw_end2end_test
 target_include_directories(raw_end2end_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14852,14 +16223,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(reconnect_interop_client
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14914,14 +16288,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(reconnect_interop_server
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14957,14 +16334,17 @@ add_executable(ref_counted_ptr_test
 target_include_directories(ref_counted_ptr_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -14996,14 +16376,17 @@ add_executable(ref_counted_test
 target_include_directories(ref_counted_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15035,14 +16418,17 @@ add_executable(retry_throttle_test
 target_include_directories(retry_throttle_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15073,14 +16459,17 @@ add_executable(secure_auth_context_test
 target_include_directories(secure_auth_context_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15114,14 +16503,17 @@ add_executable(secure_sync_unary_ping_pong_test
 target_include_directories(secure_sync_unary_ping_pong_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15158,14 +16550,17 @@ add_executable(server_builder_plugin_test
 target_include_directories(server_builder_plugin_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15212,14 +16607,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(server_builder_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15267,14 +16665,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(server_builder_with_socket_mutator_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15308,14 +16709,17 @@ add_executable(server_context_test_spouse_test
 target_include_directories(server_context_test_spouse_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15348,14 +16752,17 @@ add_executable(server_crash_test
 target_include_directories(server_crash_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15389,14 +16796,17 @@ add_executable(server_crash_test_client
 target_include_directories(server_crash_test_client
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15407,6 +16817,7 @@ target_include_directories(server_crash_test_client
 target_link_libraries(server_crash_test_client
   ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc++_test_config
   grpc++_test_util
   grpc_test_util
   grpc++
@@ -15429,14 +16840,17 @@ add_executable(server_early_return_test
 target_include_directories(server_early_return_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15470,14 +16884,17 @@ add_executable(server_interceptors_end2end_test
 target_include_directories(server_interceptors_end2end_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15524,14 +16941,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(server_request_call_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15554,6 +16974,91 @@ target_link_libraries(server_request_call_test
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
+add_executable(service_config_end2end_test
+  test/cpp/end2end/service_config_end2end_test.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
+)
+
+
+target_include_directories(service_config_end2end_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+
+target_link_libraries(service_config_end2end_test
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc++_test_util
+  grpc_test_util
+  grpc++
+  grpc
+  gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
+)
+
+
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
+add_executable(service_config_test
+  test/core/client_channel/service_config_test.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
+)
+
+
+target_include_directories(service_config_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+
+target_link_libraries(service_config_test
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc_test_util
+  grpc++
+  grpc
+  gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
+)
+
+
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
 add_executable(shutdown_test
   test/cpp/end2end/shutdown_test.cc
   third_party/googletest/googletest/src/gtest-all.cc
@@ -15564,14 +17069,17 @@ add_executable(shutdown_test
 target_include_directories(shutdown_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15604,14 +17112,17 @@ add_executable(slice_hash_table_test
 target_include_directories(slice_hash_table_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15642,14 +17153,17 @@ add_executable(slice_weak_hash_table_test
 target_include_directories(slice_weak_hash_table_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15680,14 +17194,17 @@ add_executable(stats_test
 target_include_directories(stats_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15719,14 +17236,17 @@ add_executable(status_metadata_test
 target_include_directories(status_metadata_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15755,14 +17275,17 @@ add_executable(status_util_test
 target_include_directories(status_util_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15792,14 +17315,17 @@ add_executable(streaming_throughput_test
 target_include_directories(streaming_throughput_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15864,14 +17390,17 @@ protobuf_generate_grpc_cpp(
 target_include_directories(stress_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15895,6 +17424,48 @@ target_link_libraries(stress_test
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
+add_executable(string_view_test
+  test/core/gprpp/string_view_test.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
+)
+
+
+target_include_directories(string_view_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+
+target_link_libraries(string_view_test
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc_test_util
+  grpc++
+  grpc
+  gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
+)
+
+
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
 add_executable(thread_manager_test
   test/cpp/thread_manager/thread_manager_test.cc
   third_party/googletest/googletest/src/gtest-all.cc
@@ -15905,14 +17476,17 @@ add_executable(thread_manager_test
 target_include_directories(thread_manager_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15944,14 +17518,17 @@ add_executable(thread_stress_test
 target_include_directories(thread_stress_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -15973,6 +17550,51 @@ target_link_libraries(thread_stress_test
 
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
+if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_MAC OR _gRPC_PLATFORM_POSIX)
+
+add_executable(time_change_test
+  test/cpp/end2end/time_change_test.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
+)
+
+
+target_include_directories(time_change_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+
+target_link_libraries(time_change_test
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc++_test_util
+  grpc_test_util
+  grpc++
+  grpc
+  gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
+)
+
+
+endif()
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
 
 add_executable(transport_pid_controller_test
   test/core/transport/pid_controller_test.cc
@@ -15984,14 +17606,17 @@ add_executable(transport_pid_controller_test
 target_include_directories(transport_pid_controller_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -16024,14 +17649,17 @@ add_executable(transport_security_common_api_test
 target_include_directories(transport_security_common_api_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -16063,14 +17691,17 @@ add_executable(writes_per_rpc_test
 target_include_directories(writes_per_rpc_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -16094,6 +17725,56 @@ endif()
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
+add_executable(xds_end2end_test
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/lb/v2/xds_for_test.pb.cc
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/lb/v2/xds_for_test.grpc.pb.cc
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/lb/v2/xds_for_test.pb.h
+  ${_gRPC_PROTO_GENS_DIR}/src/proto/grpc/lb/v2/xds_for_test.grpc.pb.h
+  test/cpp/end2end/xds_end2end_test.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
+)
+
+protobuf_generate_grpc_cpp(
+  src/proto/grpc/lb/v2/xds_for_test.proto
+)
+
+target_include_directories(xds_end2end_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+
+target_link_libraries(xds_end2end_test
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  grpc++_test_util
+  grpc_test_util
+  grpc++
+  grpc
+  gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
+)
+
+
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
 add_executable(public_headers_must_be_c89
   test/core/surface/public_headers_must_be_c89.c
 )
@@ -16102,14 +17783,17 @@ add_executable(public_headers_must_be_c89
 target_include_directories(public_headers_must_be_c89
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(public_headers_must_be_c89
@@ -16129,14 +17813,17 @@ add_executable(gen_hpack_tables
 target_include_directories(gen_hpack_tables
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(gen_hpack_tables
@@ -16155,14 +17842,17 @@ add_executable(gen_legal_metadata_characters
 target_include_directories(gen_legal_metadata_characters
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(gen_legal_metadata_characters
@@ -16179,14 +17869,17 @@ add_executable(gen_percent_encoding_tables
 target_include_directories(gen_percent_encoding_tables
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(gen_percent_encoding_tables
@@ -16196,398 +17889,561 @@ target_link_libraries(gen_percent_encoding_tables
 
 if (gRPC_BUILD_TESTS)
 
+add_executable(bad_streaming_id_bad_client_test
+  test/core/bad_client/tests/bad_streaming_id.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
+)
+
+
+target_include_directories(bad_streaming_id_bad_client_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+
+target_link_libraries(bad_streaming_id_bad_client_test
+  ${_gRPC_SSL_LIBRARIES}
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  bad_client_test
+  grpc_test_util_unsecure
+  grpc_unsecure
+  gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
+)
+
+
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
 add_executable(badreq_bad_client_test
   test/core/bad_client/tests/badreq.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
 )
 
 
 target_include_directories(badreq_bad_client_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 
 target_link_libraries(badreq_bad_client_test
   ${_gRPC_SSL_LIBRARIES}
+  ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
   bad_client_test
   grpc_test_util_unsecure
   grpc_unsecure
   gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
-  # avoid dependency on libstdc++
-  if (_gRPC_CORE_NOSTDCXX_FLAGS)
-    set_target_properties(badreq_bad_client_test PROPERTIES LINKER_LANGUAGE C)
-    target_compile_options(badreq_bad_client_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
-  endif()
 
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
 add_executable(connection_prefix_bad_client_test
   test/core/bad_client/tests/connection_prefix.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
 )
 
 
 target_include_directories(connection_prefix_bad_client_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 
 target_link_libraries(connection_prefix_bad_client_test
   ${_gRPC_SSL_LIBRARIES}
+  ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
   bad_client_test
   grpc_test_util_unsecure
   grpc_unsecure
   gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
-  # avoid dependency on libstdc++
-  if (_gRPC_CORE_NOSTDCXX_FLAGS)
-    set_target_properties(connection_prefix_bad_client_test PROPERTIES LINKER_LANGUAGE C)
-    target_compile_options(connection_prefix_bad_client_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
-  endif()
 
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
 add_executable(duplicate_header_bad_client_test
   test/core/bad_client/tests/duplicate_header.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
 )
 
 
 target_include_directories(duplicate_header_bad_client_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 
 target_link_libraries(duplicate_header_bad_client_test
   ${_gRPC_SSL_LIBRARIES}
+  ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
   bad_client_test
   grpc_test_util_unsecure
   grpc_unsecure
   gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
-  # avoid dependency on libstdc++
-  if (_gRPC_CORE_NOSTDCXX_FLAGS)
-    set_target_properties(duplicate_header_bad_client_test PROPERTIES LINKER_LANGUAGE C)
-    target_compile_options(duplicate_header_bad_client_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
-  endif()
 
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
 add_executable(head_of_line_blocking_bad_client_test
   test/core/bad_client/tests/head_of_line_blocking.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
 )
 
 
 target_include_directories(head_of_line_blocking_bad_client_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 
 target_link_libraries(head_of_line_blocking_bad_client_test
   ${_gRPC_SSL_LIBRARIES}
+  ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
   bad_client_test
   grpc_test_util_unsecure
   grpc_unsecure
   gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
-  # avoid dependency on libstdc++
-  if (_gRPC_CORE_NOSTDCXX_FLAGS)
-    set_target_properties(head_of_line_blocking_bad_client_test PROPERTIES LINKER_LANGUAGE C)
-    target_compile_options(head_of_line_blocking_bad_client_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
-  endif()
 
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
 add_executable(headers_bad_client_test
   test/core/bad_client/tests/headers.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
 )
 
 
 target_include_directories(headers_bad_client_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 
 target_link_libraries(headers_bad_client_test
   ${_gRPC_SSL_LIBRARIES}
+  ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
   bad_client_test
   grpc_test_util_unsecure
   grpc_unsecure
   gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
-  # avoid dependency on libstdc++
-  if (_gRPC_CORE_NOSTDCXX_FLAGS)
-    set_target_properties(headers_bad_client_test PROPERTIES LINKER_LANGUAGE C)
-    target_compile_options(headers_bad_client_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
-  endif()
 
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
 add_executable(initial_settings_frame_bad_client_test
   test/core/bad_client/tests/initial_settings_frame.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
 )
 
 
 target_include_directories(initial_settings_frame_bad_client_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 
 target_link_libraries(initial_settings_frame_bad_client_test
   ${_gRPC_SSL_LIBRARIES}
+  ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
   bad_client_test
   grpc_test_util_unsecure
   grpc_unsecure
   gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
-  # avoid dependency on libstdc++
-  if (_gRPC_CORE_NOSTDCXX_FLAGS)
-    set_target_properties(initial_settings_frame_bad_client_test PROPERTIES LINKER_LANGUAGE C)
-    target_compile_options(initial_settings_frame_bad_client_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
-  endif()
 
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
 add_executable(large_metadata_bad_client_test
   test/core/bad_client/tests/large_metadata.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
 )
 
 
 target_include_directories(large_metadata_bad_client_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 
 target_link_libraries(large_metadata_bad_client_test
   ${_gRPC_SSL_LIBRARIES}
+  ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
   bad_client_test
   grpc_test_util_unsecure
   grpc_unsecure
   gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
-  # avoid dependency on libstdc++
-  if (_gRPC_CORE_NOSTDCXX_FLAGS)
-    set_target_properties(large_metadata_bad_client_test PROPERTIES LINKER_LANGUAGE C)
-    target_compile_options(large_metadata_bad_client_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
-  endif()
+
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
+add_executable(out_of_bounds_bad_client_test
+  test/core/bad_client/tests/out_of_bounds.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
+)
+
+
+target_include_directories(out_of_bounds_bad_client_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
+)
+
+target_link_libraries(out_of_bounds_bad_client_test
+  ${_gRPC_SSL_LIBRARIES}
+  ${_gRPC_PROTOBUF_LIBRARIES}
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  bad_client_test
+  grpc_test_util_unsecure
+  grpc_unsecure
+  gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
+)
+
 
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
 add_executable(server_registered_method_bad_client_test
   test/core/bad_client/tests/server_registered_method.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
 )
 
 
 target_include_directories(server_registered_method_bad_client_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 
 target_link_libraries(server_registered_method_bad_client_test
   ${_gRPC_SSL_LIBRARIES}
+  ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
   bad_client_test
   grpc_test_util_unsecure
   grpc_unsecure
   gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
-  # avoid dependency on libstdc++
-  if (_gRPC_CORE_NOSTDCXX_FLAGS)
-    set_target_properties(server_registered_method_bad_client_test PROPERTIES LINKER_LANGUAGE C)
-    target_compile_options(server_registered_method_bad_client_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
-  endif()
 
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
 add_executable(simple_request_bad_client_test
   test/core/bad_client/tests/simple_request.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
 )
 
 
 target_include_directories(simple_request_bad_client_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 
 target_link_libraries(simple_request_bad_client_test
   ${_gRPC_SSL_LIBRARIES}
+  ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
   bad_client_test
   grpc_test_util_unsecure
   grpc_unsecure
   gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
-  # avoid dependency on libstdc++
-  if (_gRPC_CORE_NOSTDCXX_FLAGS)
-    set_target_properties(simple_request_bad_client_test PROPERTIES LINKER_LANGUAGE C)
-    target_compile_options(simple_request_bad_client_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
-  endif()
 
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
 add_executable(unknown_frame_bad_client_test
   test/core/bad_client/tests/unknown_frame.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
 )
 
 
 target_include_directories(unknown_frame_bad_client_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 
 target_link_libraries(unknown_frame_bad_client_test
   ${_gRPC_SSL_LIBRARIES}
+  ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
   bad_client_test
   grpc_test_util_unsecure
   grpc_unsecure
   gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
-  # avoid dependency on libstdc++
-  if (_gRPC_CORE_NOSTDCXX_FLAGS)
-    set_target_properties(unknown_frame_bad_client_test PROPERTIES LINKER_LANGUAGE C)
-    target_compile_options(unknown_frame_bad_client_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
-  endif()
 
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
 add_executable(window_overflow_bad_client_test
   test/core/bad_client/tests/window_overflow.cc
+  third_party/googletest/googletest/src/gtest-all.cc
+  third_party/googletest/googlemock/src/gmock-all.cc
 )
 
 
 target_include_directories(window_overflow_bad_client_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE third_party/googletest/googletest/include
+  PRIVATE third_party/googletest/googletest
+  PRIVATE third_party/googletest/googlemock/include
+  PRIVATE third_party/googletest/googlemock
+  PRIVATE ${_gRPC_PROTO_GENS_DIR}
 )
 
 target_link_libraries(window_overflow_bad_client_test
   ${_gRPC_SSL_LIBRARIES}
+  ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
   bad_client_test
   grpc_test_util_unsecure
   grpc_unsecure
   gpr
+  ${_gRPC_GFLAGS_LIBRARIES}
 )
 
-  # avoid dependency on libstdc++
-  if (_gRPC_CORE_NOSTDCXX_FLAGS)
-    set_target_properties(window_overflow_bad_client_test PROPERTIES LINKER_LANGUAGE C)
-    target_compile_options(window_overflow_bad_client_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
-  endif()
 
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
@@ -16601,14 +18457,17 @@ add_executable(bad_ssl_cert_server
 target_include_directories(bad_ssl_cert_server
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(bad_ssl_cert_server
@@ -16638,14 +18497,17 @@ add_executable(bad_ssl_cert_test
 target_include_directories(bad_ssl_cert_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(bad_ssl_cert_test
@@ -16673,14 +18535,17 @@ add_executable(h2_census_test
 target_include_directories(h2_census_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_census_test
@@ -16708,14 +18573,17 @@ add_executable(h2_compress_test
 target_include_directories(h2_compress_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_compress_test
@@ -16743,14 +18611,17 @@ add_executable(h2_fakesec_test
 target_include_directories(h2_fakesec_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_fakesec_test
@@ -16779,14 +18650,17 @@ add_executable(h2_fd_test
 target_include_directories(h2_fd_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_fd_test
@@ -16815,14 +18689,17 @@ add_executable(h2_full_test
 target_include_directories(h2_full_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_full_test
@@ -16851,14 +18728,17 @@ add_executable(h2_full+pipe_test
 target_include_directories(h2_full+pipe_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_full+pipe_test
@@ -16887,14 +18767,17 @@ add_executable(h2_full+trace_test
 target_include_directories(h2_full+trace_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_full+trace_test
@@ -16922,14 +18805,17 @@ add_executable(h2_full+workarounds_test
 target_include_directories(h2_full+workarounds_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_full+workarounds_test
@@ -16957,14 +18843,17 @@ add_executable(h2_http_proxy_test
 target_include_directories(h2_http_proxy_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_http_proxy_test
@@ -16993,14 +18882,17 @@ add_executable(h2_local_ipv4_test
 target_include_directories(h2_local_ipv4_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_local_ipv4_test
@@ -17030,14 +18922,17 @@ add_executable(h2_local_ipv6_test
 target_include_directories(h2_local_ipv6_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_local_ipv6_test
@@ -17067,14 +18962,17 @@ add_executable(h2_local_uds_test
 target_include_directories(h2_local_uds_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_local_uds_test
@@ -17103,14 +19001,17 @@ add_executable(h2_oauth2_test
 target_include_directories(h2_oauth2_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_oauth2_test
@@ -17138,14 +19039,17 @@ add_executable(h2_proxy_test
 target_include_directories(h2_proxy_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_proxy_test
@@ -17173,14 +19077,17 @@ add_executable(h2_sockpair_test
 target_include_directories(h2_sockpair_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_sockpair_test
@@ -17208,14 +19115,17 @@ add_executable(h2_sockpair+trace_test
 target_include_directories(h2_sockpair+trace_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_sockpair+trace_test
@@ -17243,14 +19153,17 @@ add_executable(h2_sockpair_1byte_test
 target_include_directories(h2_sockpair_1byte_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_sockpair_1byte_test
@@ -17270,6 +19183,44 @@ target_link_libraries(h2_sockpair_1byte_test
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
+add_executable(h2_spiffe_test
+  test/core/end2end/fixtures/h2_spiffe.cc
+)
+
+
+target_include_directories(h2_spiffe_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+)
+
+target_link_libraries(h2_spiffe_test
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  end2end_tests
+  grpc_test_util
+  grpc
+  gpr
+)
+
+  # avoid dependency on libstdc++
+  if (_gRPC_CORE_NOSTDCXX_FLAGS)
+    set_target_properties(h2_spiffe_test PROPERTIES LINKER_LANGUAGE C)
+    target_compile_options(h2_spiffe_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
+  endif()
+
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
 add_executable(h2_ssl_test
   test/core/end2end/fixtures/h2_ssl.cc
 )
@@ -17278,14 +19229,17 @@ add_executable(h2_ssl_test
 target_include_directories(h2_ssl_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_ssl_test
@@ -17305,6 +19259,44 @@ target_link_libraries(h2_ssl_test
 endif (gRPC_BUILD_TESTS)
 if (gRPC_BUILD_TESTS)
 
+add_executable(h2_ssl_cred_reload_test
+  test/core/end2end/fixtures/h2_ssl_cred_reload.cc
+)
+
+
+target_include_directories(h2_ssl_cred_reload_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
+  PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
+  PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
+  PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
+  PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+)
+
+target_link_libraries(h2_ssl_cred_reload_test
+  ${_gRPC_ALLTARGETS_LIBRARIES}
+  end2end_tests
+  grpc_test_util
+  grpc
+  gpr
+)
+
+  # avoid dependency on libstdc++
+  if (_gRPC_CORE_NOSTDCXX_FLAGS)
+    set_target_properties(h2_ssl_cred_reload_test PROPERTIES LINKER_LANGUAGE C)
+    target_compile_options(h2_ssl_cred_reload_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_gRPC_CORE_NOSTDCXX_FLAGS}>)
+  endif()
+
+endif (gRPC_BUILD_TESTS)
+if (gRPC_BUILD_TESTS)
+
 add_executable(h2_ssl_proxy_test
   test/core/end2end/fixtures/h2_ssl_proxy.cc
 )
@@ -17313,14 +19305,17 @@ add_executable(h2_ssl_proxy_test
 target_include_directories(h2_ssl_proxy_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_ssl_proxy_test
@@ -17349,14 +19344,17 @@ add_executable(h2_uds_test
 target_include_directories(h2_uds_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_uds_test
@@ -17385,14 +19383,17 @@ add_executable(inproc_test
 target_include_directories(inproc_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(inproc_test
@@ -17420,14 +19421,17 @@ add_executable(h2_census_nosec_test
 target_include_directories(h2_census_nosec_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_census_nosec_test
@@ -17455,14 +19459,17 @@ add_executable(h2_compress_nosec_test
 target_include_directories(h2_compress_nosec_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_compress_nosec_test
@@ -17491,14 +19498,17 @@ add_executable(h2_fd_nosec_test
 target_include_directories(h2_fd_nosec_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_fd_nosec_test
@@ -17527,14 +19537,17 @@ add_executable(h2_full_nosec_test
 target_include_directories(h2_full_nosec_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_full_nosec_test
@@ -17563,14 +19576,17 @@ add_executable(h2_full+pipe_nosec_test
 target_include_directories(h2_full+pipe_nosec_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_full+pipe_nosec_test
@@ -17599,14 +19615,17 @@ add_executable(h2_full+trace_nosec_test
 target_include_directories(h2_full+trace_nosec_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_full+trace_nosec_test
@@ -17634,14 +19653,17 @@ add_executable(h2_full+workarounds_nosec_test
 target_include_directories(h2_full+workarounds_nosec_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_full+workarounds_nosec_test
@@ -17669,14 +19691,17 @@ add_executable(h2_http_proxy_nosec_test
 target_include_directories(h2_http_proxy_nosec_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_http_proxy_nosec_test
@@ -17704,14 +19729,17 @@ add_executable(h2_proxy_nosec_test
 target_include_directories(h2_proxy_nosec_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_proxy_nosec_test
@@ -17739,14 +19767,17 @@ add_executable(h2_sockpair_nosec_test
 target_include_directories(h2_sockpair_nosec_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_sockpair_nosec_test
@@ -17774,14 +19805,17 @@ add_executable(h2_sockpair+trace_nosec_test
 target_include_directories(h2_sockpair+trace_nosec_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_sockpair+trace_nosec_test
@@ -17809,14 +19843,17 @@ add_executable(h2_sockpair_1byte_nosec_test
 target_include_directories(h2_sockpair_1byte_nosec_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_sockpair_1byte_nosec_test
@@ -17845,14 +19882,17 @@ add_executable(h2_uds_nosec_test
 target_include_directories(h2_uds_nosec_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(h2_uds_nosec_test
@@ -17883,14 +19923,17 @@ add_executable(resolver_component_test_unsecure
 target_include_directories(resolver_component_test_unsecure
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -17901,6 +19944,7 @@ target_include_directories(resolver_component_test_unsecure
 target_link_libraries(resolver_component_test_unsecure
   ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
+  dns_test_util
   grpc++_test_util_unsecure
   grpc_test_util_unsecure
   grpc++_unsecure
@@ -17924,14 +19968,17 @@ add_executable(resolver_component_test
 target_include_directories(resolver_component_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -17942,6 +19989,7 @@ target_include_directories(resolver_component_test
 target_link_libraries(resolver_component_test
   ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
+  dns_test_util
   grpc++_test_util
   grpc_test_util
   grpc++
@@ -17966,14 +20014,17 @@ add_executable(resolver_component_tests_runner_invoker_unsecure
 target_include_directories(resolver_component_tests_runner_invoker_unsecure
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -18009,14 +20060,17 @@ add_executable(resolver_component_tests_runner_invoker
 target_include_directories(resolver_component_tests_runner_invoker
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -18051,14 +20105,17 @@ add_executable(address_sorting_test_unsecure
 target_include_directories(address_sorting_test_unsecure
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -18092,14 +20149,17 @@ add_executable(address_sorting_test
 target_include_directories(address_sorting_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -18133,14 +20193,17 @@ add_executable(cancel_ares_query_test
 target_include_directories(cancel_ares_query_test
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
   PRIVATE third_party/googletest/googletest/include
   PRIVATE third_party/googletest/googletest
   PRIVATE third_party/googletest/googlemock/include
@@ -18151,6 +20214,7 @@ target_include_directories(cancel_ares_query_test
 target_link_libraries(cancel_ares_query_test
   ${_gRPC_PROTOBUF_LIBRARIES}
   ${_gRPC_ALLTARGETS_LIBRARIES}
+  dns_test_util
   grpc++_test_util
   grpc_test_util
   grpc++
@@ -18173,14 +20237,17 @@ add_executable(alts_credentials_fuzzer_one_entry
 target_include_directories(alts_credentials_fuzzer_one_entry
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(alts_credentials_fuzzer_one_entry
@@ -18208,14 +20275,17 @@ add_executable(api_fuzzer_one_entry
 target_include_directories(api_fuzzer_one_entry
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(api_fuzzer_one_entry
@@ -18243,14 +20313,17 @@ add_executable(client_fuzzer_one_entry
 target_include_directories(client_fuzzer_one_entry
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(client_fuzzer_one_entry
@@ -18278,14 +20351,17 @@ add_executable(hpack_parser_fuzzer_test_one_entry
 target_include_directories(hpack_parser_fuzzer_test_one_entry
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(hpack_parser_fuzzer_test_one_entry
@@ -18313,14 +20389,17 @@ add_executable(http_request_fuzzer_test_one_entry
 target_include_directories(http_request_fuzzer_test_one_entry
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(http_request_fuzzer_test_one_entry
@@ -18348,14 +20427,17 @@ add_executable(http_response_fuzzer_test_one_entry
 target_include_directories(http_response_fuzzer_test_one_entry
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(http_response_fuzzer_test_one_entry
@@ -18383,14 +20465,17 @@ add_executable(json_fuzzer_test_one_entry
 target_include_directories(json_fuzzer_test_one_entry
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(json_fuzzer_test_one_entry
@@ -18418,14 +20503,17 @@ add_executable(nanopb_fuzzer_response_test_one_entry
 target_include_directories(nanopb_fuzzer_response_test_one_entry
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(nanopb_fuzzer_response_test_one_entry
@@ -18453,14 +20541,17 @@ add_executable(nanopb_fuzzer_serverlist_test_one_entry
 target_include_directories(nanopb_fuzzer_serverlist_test_one_entry
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(nanopb_fuzzer_serverlist_test_one_entry
@@ -18488,14 +20579,17 @@ add_executable(percent_decode_fuzzer_one_entry
 target_include_directories(percent_decode_fuzzer_one_entry
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(percent_decode_fuzzer_one_entry
@@ -18523,14 +20617,17 @@ add_executable(percent_encode_fuzzer_one_entry
 target_include_directories(percent_encode_fuzzer_one_entry
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(percent_encode_fuzzer_one_entry
@@ -18558,14 +20655,17 @@ add_executable(server_fuzzer_one_entry
 target_include_directories(server_fuzzer_one_entry
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(server_fuzzer_one_entry
@@ -18593,14 +20693,17 @@ add_executable(ssl_server_fuzzer_one_entry
 target_include_directories(ssl_server_fuzzer_one_entry
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(ssl_server_fuzzer_one_entry
@@ -18628,14 +20731,17 @@ add_executable(uri_fuzzer_test_one_entry
 target_include_directories(uri_fuzzer_test_one_entry
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
-  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_BENCHMARK_INCLUDE_DIR}
   PRIVATE ${_gRPC_CARES_INCLUDE_DIR}
   PRIVATE ${_gRPC_GFLAGS_INCLUDE_DIR}
-  PRIVATE ${_gRPC_ADDRESS_SORTING_INCLUDE_DIR}
   PRIVATE ${_gRPC_NANOPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_PROTOBUF_INCLUDE_DIR}
+  PRIVATE ${_gRPC_SSL_INCLUDE_DIR}
+  PRIVATE ${_gRPC_UPB_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_GRPC_GENERATED_DIR}
+  PRIVATE ${_gRPC_UPB_INCLUDE_DIR}
+  PRIVATE ${_gRPC_ZLIB_INCLUDE_DIR}
 )
 
 target_link_libraries(uri_fuzzer_test_one_entry

@@ -94,6 +94,20 @@ ENV CLANG_FORMAT=clang-format
 RUN ln -s /clang+llvm-5.0.0-linux-x86_64-ubuntu14.04/bin/clang-tidy /usr/local/bin/clang-tidy
 ENV CLANG_TIDY=clang-tidy
 
+#========================
+# Bazel installation
+
+# Must be in sync with tools/bazel
+ENV BAZEL_VERSION 0.26.0
+
+# The correct bazel version is already preinstalled, no need to use //tools/bazel wrapper.
+ENV DISABLE_BAZEL_WRAPPER 1
+
+RUN apt-get update && apt-get install -y wget && apt-get clean
+RUN wget "https://github.com/bazelbuild/bazel/releases/download/$BAZEL_VERSION/bazel-$BAZEL_VERSION-installer-linux-x86_64.sh" && \
+  bash ./bazel-$BAZEL_VERSION-installer-linux-x86_64.sh && \
+  rm bazel-$BAZEL_VERSION-installer-linux-x86_64.sh
+
 
 # Define the default command.
 CMD ["bash"]

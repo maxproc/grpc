@@ -26,6 +26,7 @@
 #include <grpcpp/channel.h>
 #include <grpcpp/client_context.h>
 #include <grpcpp/create_channel.h>
+#include <grpcpp/impl/codegen/status_code_enum.h>
 #include <grpcpp/resource_quota.h>
 #include <grpcpp/security/auth_metadata_processor.h>
 #include <grpcpp/security/credentials.h>
@@ -34,7 +35,8 @@
 #include <grpcpp/server_builder.h>
 #include <grpcpp/server_context.h>
 
-#include "src/core/lib/gpr/env.h"
+#include "src/core/ext/filters/client_channel/backup_poller.h"
+#include "src/core/lib/iomgr/iomgr.h"
 #include "src/core/lib/security/credentials/credentials.h"
 #include "src/proto/grpc/testing/duplicate/echo_duplicate.grpc.pb.h"
 #include "src/proto/grpc/testing/echo.grpc.pb.h"
@@ -45,12 +47,27 @@
 #include "test/cpp/util/string_ref_helper.h"
 #include "test/cpp/util/test_credentials_provider.h"
 
+#ifdef GRPC_POSIX_SOCKET
+#include "src/core/lib/iomgr/ev_posix.h"
+#endif  // GRPC_POSIX_SOCKET
+
 #include <gtest/gtest.h>
 
 using grpc::testing::EchoRequest;
 using grpc::testing::EchoResponse;
 using grpc::testing::kTlsCredentialsType;
 using std::chrono::system_clock;
+
+// MAYBE_SKIP_TEST is a macro to determine if this particular test configuration
+// should be skipped based on a decision made at SetUp time. In particular,
+// tests that use the callback server can only be run if the iomgr can run in
+// the background or if the transport is in-process.
+#define MAYBE_SKIP_TEST \
+  do {                  \
+    if (do_not_test_) { \
+      return;           \
+    }                   \
+  } while (0)
 
 namespace grpc {
 namespace testing {
@@ -74,11 +91,13 @@ class TestMetadataCredentialsPlugin : public MetadataCredentialsPlugin {
 
   TestMetadataCredentialsPlugin(const grpc::string_ref& metadata_key,
                                 const grpc::string_ref& metadata_value,
-                                bool is_blocking, bool is_successful)
+                                bool is_blocking, bool is_successful,
+                                int delay_ms)
       : metadata_key_(metadata_key.data(), metadata_key.length()),
         metadata_value_(metadata_value.data(), metadata_value.length()),
         is_blocking_(is_blocking),
-        is_successful_(is_successful) {}
+        is_successful_(is_successful),
+        delay_ms_(delay_ms) {}
 
   bool IsBlocking() const override { return is_blocking_; }
 
@@ -86,6 +105,11 @@ class TestMetadataCredentialsPlugin : public MetadataCredentialsPlugin {
       grpc::string_ref service_url, grpc::string_ref method_name,
       const grpc::AuthContext& channel_auth_context,
       std::multimap<grpc::string, grpc::string>* metadata) override {
+    if (delay_ms_ != 0) {
+      gpr_sleep_until(
+          gpr_time_add(gpr_now(GPR_CLOCK_REALTIME),
+                       gpr_time_from_millis(delay_ms_, GPR_TIMESPAN)));
+    }
     EXPECT_GT(service_url.length(), 0UL);
     EXPECT_GT(method_name.length(), 0UL);
     EXPECT_TRUE(channel_auth_context.IsPeerAuthenticated());
@@ -103,6 +127,7 @@ class TestMetadataCredentialsPlugin : public MetadataCredentialsPlugin {
   grpc::string metadata_value_;
   bool is_blocking_;
   bool is_successful_;
+  int delay_ms_;
 };
 
 const char TestMetadataCredentialsPlugin::kBadMetadataKey[] =
@@ -117,19 +142,19 @@ class TestAuthMetadataProcessor : public AuthMetadataProcessor {
   TestAuthMetadataProcessor(bool is_blocking) : is_blocking_(is_blocking) {}
 
   std::shared_ptr<CallCredentials> GetCompatibleClientCreds() {
-    return MetadataCredentialsFromPlugin(
+    return grpc::MetadataCredentialsFromPlugin(
         std::unique_ptr<MetadataCredentialsPlugin>(
             new TestMetadataCredentialsPlugin(
                 TestMetadataCredentialsPlugin::kGoodMetadataKey, kGoodGuy,
-                is_blocking_, true)));
+                is_blocking_, true, 0)));
   }
 
   std::shared_ptr<CallCredentials> GetIncompatibleClientCreds() {
-    return MetadataCredentialsFromPlugin(
+    return grpc::MetadataCredentialsFromPlugin(
         std::unique_ptr<MetadataCredentialsPlugin>(
             new TestMetadataCredentialsPlugin(
                 TestMetadataCredentialsPlugin::kGoodMetadataKey, "Mr Hyde",
-                is_blocking_, true)));
+                is_blocking_, true, 0)));
   }
 
   // Interface implementation
@@ -237,6 +262,14 @@ class End2endTest : public ::testing::TestWithParam<TestScenario> {
     GetParam().Log();
   }
 
+  void SetUp() override {
+    if (GetParam().callback_server && !GetParam().inproc &&
+        !grpc_iomgr_run_in_background()) {
+      do_not_test_ = true;
+      return;
+    }
+  }
+
   void TearDown() override {
     if (is_server_started_) {
       server_->Shutdown();
@@ -320,8 +353,8 @@ class End2endTest : public ::testing::TestWithParam<TestScenario> {
 
     if (!GetParam().inproc) {
       if (!GetParam().use_interceptors) {
-        channel_ =
-            CreateCustomChannel(server_address_.str(), channel_creds, args);
+        channel_ = ::grpc::CreateCustomChannel(server_address_.str(),
+                                               channel_creds, args);
       } else {
         channel_ = CreateCustomChannelWithInterceptors(
             server_address_.str(), channel_creds, args,
@@ -354,13 +387,15 @@ class End2endTest : public ::testing::TestWithParam<TestScenario> {
 
       proxy_server_ = builder.BuildAndStart();
 
-      channel_ = CreateChannel(proxyaddr.str(), InsecureChannelCredentials());
+      channel_ =
+          grpc::CreateChannel(proxyaddr.str(), InsecureChannelCredentials());
     }
 
     stub_ = grpc::testing::EchoTestService::NewStub(channel_);
     DummyInterceptor::Reset();
   }
 
+  bool do_not_test_{false};
   bool is_server_started_;
   std::shared_ptr<Channel> channel_;
   std::unique_ptr<grpc::testing::EchoTestService::Stub> stub_;
@@ -416,6 +451,7 @@ class End2endServerTryCancelTest : public End2endTest {
   // NOTE: Do not call this function with server_try_cancel == DO_NOT_CANCEL.
   void TestRequestStreamServerCancel(
       ServerTryCancelRequestPhase server_try_cancel, int num_msgs_to_send) {
+    MAYBE_SKIP_TEST;
     RestartServer(std::shared_ptr<AuthMetadataProcessor>());
     ResetStub();
     EchoRequest request;
@@ -494,6 +530,7 @@ class End2endServerTryCancelTest : public End2endTest {
   // NOTE: Do not call this function with server_try_cancel == DO_NOT_CANCEL.
   void TestResponseStreamServerCancel(
       ServerTryCancelRequestPhase server_try_cancel) {
+    MAYBE_SKIP_TEST;
     RestartServer(std::shared_ptr<AuthMetadataProcessor>());
     ResetStub();
     EchoRequest request;
@@ -575,6 +612,7 @@ class End2endServerTryCancelTest : public End2endTest {
   // NOTE: Do not call this function with server_try_cancel == DO_NOT_CANCEL.
   void TestBidiStreamServerCancel(ServerTryCancelRequestPhase server_try_cancel,
                                   int num_messages) {
+    MAYBE_SKIP_TEST;
     RestartServer(std::shared_ptr<AuthMetadataProcessor>());
     ResetStub();
     EchoRequest request;
@@ -650,6 +688,7 @@ class End2endServerTryCancelTest : public End2endTest {
 };
 
 TEST_P(End2endServerTryCancelTest, RequestEchoServerCancel) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -712,6 +751,7 @@ TEST_P(End2endServerTryCancelTest, BidiStreamServerCancelAfter) {
 }
 
 TEST_P(End2endTest, SimpleRpcWithCustomUserAgentPrefix) {
+  MAYBE_SKIP_TEST;
   // User-Agent is an HTTP header for HTTP transports only
   if (GetParam().inproc) {
     return;
@@ -735,6 +775,7 @@ TEST_P(End2endTest, SimpleRpcWithCustomUserAgentPrefix) {
 }
 
 TEST_P(End2endTest, MultipleRpcsWithVariedBinaryMetadataValue) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   std::vector<std::thread> threads;
   threads.reserve(10);
@@ -747,6 +788,7 @@ TEST_P(End2endTest, MultipleRpcsWithVariedBinaryMetadataValue) {
 }
 
 TEST_P(End2endTest, MultipleRpcs) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   std::vector<std::thread> threads;
   threads.reserve(10);
@@ -758,18 +800,33 @@ TEST_P(End2endTest, MultipleRpcs) {
   }
 }
 
+TEST_P(End2endTest, EmptyBinaryMetadata) {
+  MAYBE_SKIP_TEST;
+  ResetStub();
+  EchoRequest request;
+  EchoResponse response;
+  request.set_message("Hello hello hello hello");
+  ClientContext context;
+  context.AddMetadata("custom-bin", "");
+  Status s = stub_->Echo(&context, request, &response);
+  EXPECT_EQ(response.message(), request.message());
+  EXPECT_TRUE(s.ok());
+}
+
 TEST_P(End2endTest, ReconnectChannel) {
+  MAYBE_SKIP_TEST;
   if (GetParam().inproc) {
     return;
   }
   int poller_slowdown_factor = 1;
   // It needs 2 pollset_works to reconnect the channel with polling engine
   // "poll"
-  char* s = gpr_getenv("GRPC_POLL_STRATEGY");
-  if (s != nullptr && 0 == strcmp(s, "poll")) {
+#ifdef GRPC_POSIX_SOCKET
+  grpc_core::UniquePtr<char> poller = GPR_GLOBAL_CONFIG_GET(grpc_poll_strategy);
+  if (0 == strcmp(poller.get(), "poll")) {
     poller_slowdown_factor = 2;
   }
-  gpr_free(s);
+#endif  // GRPC_POSIX_SOCKET
   ResetStub();
   SendRpc(stub_.get(), 1, false);
   RestartServer(std::shared_ptr<AuthMetadataProcessor>());
@@ -784,6 +841,7 @@ TEST_P(End2endTest, ReconnectChannel) {
 }
 
 TEST_P(End2endTest, RequestStreamOneRequest) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -800,6 +858,7 @@ TEST_P(End2endTest, RequestStreamOneRequest) {
 }
 
 TEST_P(End2endTest, RequestStreamOneRequestWithCoalescingApi) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -815,6 +874,7 @@ TEST_P(End2endTest, RequestStreamOneRequestWithCoalescingApi) {
 }
 
 TEST_P(End2endTest, RequestStreamTwoRequests) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -831,6 +891,7 @@ TEST_P(End2endTest, RequestStreamTwoRequests) {
 }
 
 TEST_P(End2endTest, RequestStreamTwoRequestsWithWriteThrough) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -847,6 +908,7 @@ TEST_P(End2endTest, RequestStreamTwoRequestsWithWriteThrough) {
 }
 
 TEST_P(End2endTest, RequestStreamTwoRequestsWithCoalescingApi) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -863,6 +925,7 @@ TEST_P(End2endTest, RequestStreamTwoRequestsWithCoalescingApi) {
 }
 
 TEST_P(End2endTest, ResponseStream) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -881,6 +944,7 @@ TEST_P(End2endTest, ResponseStream) {
 }
 
 TEST_P(End2endTest, ResponseStreamWithCoalescingApi) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -902,6 +966,7 @@ TEST_P(End2endTest, ResponseStreamWithCoalescingApi) {
 // This was added to prevent regression from issue:
 // https://github.com/grpc/grpc/issues/11546
 TEST_P(End2endTest, ResponseStreamWithEverythingCoalesced) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -923,6 +988,7 @@ TEST_P(End2endTest, ResponseStreamWithEverythingCoalesced) {
 }
 
 TEST_P(End2endTest, BidiStream) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -947,6 +1013,7 @@ TEST_P(End2endTest, BidiStream) {
 }
 
 TEST_P(End2endTest, BidiStreamWithCoalescingApi) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -982,6 +1049,7 @@ TEST_P(End2endTest, BidiStreamWithCoalescingApi) {
 // This was added to prevent regression from issue:
 // https://github.com/grpc/grpc/issues/11546
 TEST_P(End2endTest, BidiStreamWithEverythingCoalesced) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1007,6 +1075,7 @@ TEST_P(End2endTest, BidiStreamWithEverythingCoalesced) {
 // Talk to the two services with the same name but different package names.
 // The two stubs are created on the same channel.
 TEST_P(End2endTest, DiffPackageServices) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1035,6 +1104,7 @@ void CancelRpc(ClientContext* context, int delay_us, ServiceType* service) {
 }
 
 TEST_P(End2endTest, CancelRpcBeforeStart) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1051,6 +1121,7 @@ TEST_P(End2endTest, CancelRpcBeforeStart) {
 
 // Client cancels request stream after sending two messages
 TEST_P(End2endTest, ClientCancelsRequestStream) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1074,6 +1145,7 @@ TEST_P(End2endTest, ClientCancelsRequestStream) {
 
 // Client cancels server stream after sending some messages
 TEST_P(End2endTest, ClientCancelsResponseStream) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1109,6 +1181,7 @@ TEST_P(End2endTest, ClientCancelsResponseStream) {
 
 // Client cancels bidi stream after sending some messages
 TEST_P(End2endTest, ClientCancelsBidi) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1144,6 +1217,7 @@ TEST_P(End2endTest, ClientCancelsBidi) {
 }
 
 TEST_P(End2endTest, RpcMaxMessageSize) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1166,6 +1240,7 @@ void ReaderThreadFunc(ClientReaderWriter<EchoRequest, EchoResponse>* stream,
 
 // Run a Read and a WritesDone simultaneously.
 TEST_P(End2endTest, SimultaneousReadWritesDone) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   ClientContext context;
   gpr_event ev;
@@ -1180,6 +1255,7 @@ TEST_P(End2endTest, SimultaneousReadWritesDone) {
 }
 
 TEST_P(End2endTest, ChannelState) {
+  MAYBE_SKIP_TEST;
   if (GetParam().inproc) {
     return;
   }
@@ -1216,7 +1292,7 @@ TEST_P(End2endTest, ChannelStateTimeout) {
   server_address << "127.0.0.1:" << port;
   // Channel to non-existing server
   auto channel =
-      CreateChannel(server_address.str(), InsecureChannelCredentials());
+      grpc::CreateChannel(server_address.str(), InsecureChannelCredentials());
   // Start IDLE
   EXPECT_EQ(GRPC_CHANNEL_IDLE, channel->GetState(true));
 
@@ -1230,6 +1306,7 @@ TEST_P(End2endTest, ChannelStateTimeout) {
 
 // Talking to a non-existing service.
 TEST_P(End2endTest, NonExistingService) {
+  MAYBE_SKIP_TEST;
   ResetChannel();
   std::unique_ptr<grpc::testing::UnimplementedEchoService::Stub> stub;
   stub = grpc::testing::UnimplementedEchoService::NewStub(channel_);
@@ -1247,6 +1324,7 @@ TEST_P(End2endTest, NonExistingService) {
 // Ask the server to send back a serialized proto in trailer.
 // This is an example of setting error details.
 TEST_P(End2endTest, BinaryTrailerTest) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1273,6 +1351,7 @@ TEST_P(End2endTest, BinaryTrailerTest) {
 }
 
 TEST_P(End2endTest, ExpectErrorTest) {
+  MAYBE_SKIP_TEST;
   ResetStub();
 
   std::vector<ErrorStatus> expected_status;
@@ -1317,6 +1396,80 @@ TEST_P(End2endTest, ExpectErrorTest) {
   }
 }
 
+TEST_P(End2endTest, DelayedRpcEarlyCanceledUsingCancelCallback) {
+  MAYBE_SKIP_TEST;
+  // This test case is only relevant with callback server.
+  // Additionally, using interceptors makes this test subject to
+  // timing-dependent failures if the interceptors take too long to run.
+  if (!GetParam().callback_server || GetParam().use_interceptors) {
+    return;
+  }
+
+  ResetStub();
+  ClientContext context;
+  context.AddMetadata(kServerUseCancelCallback,
+                      grpc::to_string(MAYBE_USE_CALLBACK_EARLY_CANCEL));
+  EchoRequest request;
+  EchoResponse response;
+  request.set_message("Hello");
+  request.mutable_param()->set_skip_cancelled_check(true);
+  context.TryCancel();
+  Status s = stub_->Echo(&context, request, &response);
+  EXPECT_EQ(StatusCode::CANCELLED, s.error_code());
+}
+
+TEST_P(End2endTest, DelayedRpcLateCanceledUsingCancelCallback) {
+  MAYBE_SKIP_TEST;
+  // This test case is only relevant with callback server.
+  // Additionally, using interceptors makes this test subject to
+  // timing-dependent failures if the interceptors take too long to run.
+  if (!GetParam().callback_server || GetParam().use_interceptors) {
+    return;
+  }
+
+  ResetStub();
+  ClientContext context;
+  context.AddMetadata(kServerUseCancelCallback,
+                      grpc::to_string(MAYBE_USE_CALLBACK_LATE_CANCEL));
+  EchoRequest request;
+  EchoResponse response;
+  request.set_message("Hello");
+  request.mutable_param()->set_skip_cancelled_check(true);
+  // Let server sleep for 200 ms first to give the cancellation a chance.
+  // This is split into 100 ms to start the cancel and 100 ms extra time for
+  // it to make it to the server, to make it highly probable that the server
+  // RPC would have already started by the time the cancellation is sent
+  // and the server-side gets enough time to react to it.
+  request.mutable_param()->set_server_sleep_us(200000);
+
+  std::thread echo_thread{[this, &context, &request, &response] {
+    Status s = stub_->Echo(&context, request, &response);
+    EXPECT_EQ(StatusCode::CANCELLED, s.error_code());
+  }};
+  std::this_thread::sleep_for(std::chrono::microseconds(100000));
+  context.TryCancel();
+  echo_thread.join();
+}
+
+TEST_P(End2endTest, DelayedRpcNonCanceledUsingCancelCallback) {
+  MAYBE_SKIP_TEST;
+  if (!GetParam().callback_server) {
+    return;
+  }
+
+  ResetStub();
+  EchoRequest request;
+  EchoResponse response;
+  request.set_message("Hello");
+
+  ClientContext context;
+  context.AddMetadata(kServerUseCancelCallback,
+                      grpc::to_string(MAYBE_USE_CALLBACK_NO_CANCEL));
+
+  Status s = stub_->Echo(&context, request, &response);
+  EXPECT_TRUE(s.ok());
+}
+
 //////////////////////////////////////////////////////////////////////////
 // Test with and without a proxy.
 class ProxyEnd2endTest : public End2endTest {
@@ -1324,11 +1477,13 @@ class ProxyEnd2endTest : public End2endTest {
 };
 
 TEST_P(ProxyEnd2endTest, SimpleRpc) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   SendRpc(stub_.get(), 1, false);
 }
 
 TEST_P(ProxyEnd2endTest, SimpleRpcWithEmptyMessages) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1339,6 +1494,7 @@ TEST_P(ProxyEnd2endTest, SimpleRpcWithEmptyMessages) {
 }
 
 TEST_P(ProxyEnd2endTest, MultipleRpcs) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   std::vector<std::thread> threads;
   threads.reserve(10);
@@ -1352,6 +1508,7 @@ TEST_P(ProxyEnd2endTest, MultipleRpcs) {
 
 // Set a 10us deadline and make sure proper error is returned.
 TEST_P(ProxyEnd2endTest, RpcDeadlineExpires) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1377,6 +1534,7 @@ TEST_P(ProxyEnd2endTest, RpcDeadlineExpires) {
 
 // Set a long but finite deadline.
 TEST_P(ProxyEnd2endTest, RpcLongDeadline) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1393,6 +1551,7 @@ TEST_P(ProxyEnd2endTest, RpcLongDeadline) {
 
 // Ask server to echo back the deadline it sees.
 TEST_P(ProxyEnd2endTest, EchoDeadline) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1418,6 +1577,7 @@ TEST_P(ProxyEnd2endTest, EchoDeadline) {
 
 // Ask server to echo back the deadline it sees. The rpc has no deadline.
 TEST_P(ProxyEnd2endTest, EchoDeadlineForNoDeadlineRpc) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1433,6 +1593,7 @@ TEST_P(ProxyEnd2endTest, EchoDeadlineForNoDeadlineRpc) {
 }
 
 TEST_P(ProxyEnd2endTest, UnimplementedRpc) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1448,6 +1609,7 @@ TEST_P(ProxyEnd2endTest, UnimplementedRpc) {
 
 // Client cancels rpc after 10ms
 TEST_P(ProxyEnd2endTest, ClientCancelsRpc) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1482,6 +1644,7 @@ TEST_P(ProxyEnd2endTest, ClientCancelsRpc) {
 
 // Server cancels rpc after 1ms
 TEST_P(ProxyEnd2endTest, ServerCancelsRpc) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1496,6 +1659,7 @@ TEST_P(ProxyEnd2endTest, ServerCancelsRpc) {
 
 // Make the response larger than the flow control window.
 TEST_P(ProxyEnd2endTest, HugeResponse) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1513,6 +1677,7 @@ TEST_P(ProxyEnd2endTest, HugeResponse) {
 }
 
 TEST_P(ProxyEnd2endTest, Peer) {
+  MAYBE_SKIP_TEST;
   // Peer is not meaningful for inproc
   if (GetParam().inproc) {
     return;
@@ -1541,6 +1706,7 @@ class SecureEnd2endTest : public End2endTest {
 };
 
 TEST_P(SecureEnd2endTest, SimpleRpcWithHost) {
+  MAYBE_SKIP_TEST;
   ResetStub();
 
   EchoRequest request;
@@ -1572,6 +1738,7 @@ bool MetadataContains(
 }
 
 TEST_P(SecureEnd2endTest, BlockingAuthMetadataPluginAndProcessorSuccess) {
+  MAYBE_SKIP_TEST;
   auto* processor = new TestAuthMetadataProcessor(true);
   StartServer(std::shared_ptr<AuthMetadataProcessor>(processor));
   ResetStub();
@@ -1597,6 +1764,7 @@ TEST_P(SecureEnd2endTest, BlockingAuthMetadataPluginAndProcessorSuccess) {
 }
 
 TEST_P(SecureEnd2endTest, BlockingAuthMetadataPluginAndProcessorFailure) {
+  MAYBE_SKIP_TEST;
   auto* processor = new TestAuthMetadataProcessor(true);
   StartServer(std::shared_ptr<AuthMetadataProcessor>(processor));
   ResetStub();
@@ -1612,6 +1780,7 @@ TEST_P(SecureEnd2endTest, BlockingAuthMetadataPluginAndProcessorFailure) {
 }
 
 TEST_P(SecureEnd2endTest, SetPerCallCredentials) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1634,6 +1803,7 @@ TEST_P(SecureEnd2endTest, SetPerCallCredentials) {
 }
 
 TEST_P(SecureEnd2endTest, OverridePerCallCredentials) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1665,15 +1835,17 @@ TEST_P(SecureEnd2endTest, OverridePerCallCredentials) {
 }
 
 TEST_P(SecureEnd2endTest, AuthMetadataPluginKeyFailure) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
   ClientContext context;
-  context.set_credentials(
-      MetadataCredentialsFromPlugin(std::unique_ptr<MetadataCredentialsPlugin>(
+  context.set_credentials(grpc::MetadataCredentialsFromPlugin(
+      std::unique_ptr<MetadataCredentialsPlugin>(
           new TestMetadataCredentialsPlugin(
               TestMetadataCredentialsPlugin::kBadMetadataKey,
-              "Does not matter, will fail the key is invalid.", false, true))));
+              "Does not matter, will fail the key is invalid.", false, true,
+              0))));
   request.set_message("Hello");
 
   Status s = stub_->Echo(&context, request, &response);
@@ -1682,15 +1854,16 @@ TEST_P(SecureEnd2endTest, AuthMetadataPluginKeyFailure) {
 }
 
 TEST_P(SecureEnd2endTest, AuthMetadataPluginValueFailure) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
   ClientContext context;
-  context.set_credentials(
-      MetadataCredentialsFromPlugin(std::unique_ptr<MetadataCredentialsPlugin>(
+  context.set_credentials(grpc::MetadataCredentialsFromPlugin(
+      std::unique_ptr<MetadataCredentialsPlugin>(
           new TestMetadataCredentialsPlugin(
               TestMetadataCredentialsPlugin::kGoodMetadataKey,
-              "With illegal \n value.", false, true))));
+              "With illegal \n value.", false, true, 0))));
   request.set_message("Hello");
 
   Status s = stub_->Echo(&context, request, &response);
@@ -1698,17 +1871,69 @@ TEST_P(SecureEnd2endTest, AuthMetadataPluginValueFailure) {
   EXPECT_EQ(s.error_code(), StatusCode::UNAVAILABLE);
 }
 
+TEST_P(SecureEnd2endTest, AuthMetadataPluginWithDeadline) {
+  MAYBE_SKIP_TEST;
+  ResetStub();
+  EchoRequest request;
+  request.mutable_param()->set_skip_cancelled_check(true);
+  EchoResponse response;
+  ClientContext context;
+  const int delay = 100;
+  std::chrono::system_clock::time_point deadline =
+      std::chrono::system_clock::now() + std::chrono::milliseconds(delay);
+  context.set_deadline(deadline);
+  context.set_credentials(grpc::MetadataCredentialsFromPlugin(
+      std::unique_ptr<MetadataCredentialsPlugin>(
+          new TestMetadataCredentialsPlugin("meta_key", "Does not matter", true,
+                                            true, delay))));
+  request.set_message("Hello");
+
+  Status s = stub_->Echo(&context, request, &response);
+  if (!s.ok()) {
+    EXPECT_TRUE(s.error_code() == StatusCode::DEADLINE_EXCEEDED ||
+                s.error_code() == StatusCode::UNAVAILABLE);
+  }
+}
+
+TEST_P(SecureEnd2endTest, AuthMetadataPluginWithCancel) {
+  MAYBE_SKIP_TEST;
+  ResetStub();
+  EchoRequest request;
+  request.mutable_param()->set_skip_cancelled_check(true);
+  EchoResponse response;
+  ClientContext context;
+  const int delay = 100;
+  context.set_credentials(grpc::MetadataCredentialsFromPlugin(
+      std::unique_ptr<MetadataCredentialsPlugin>(
+          new TestMetadataCredentialsPlugin("meta_key", "Does not matter", true,
+                                            true, delay))));
+  request.set_message("Hello");
+
+  std::thread cancel_thread([&] {
+    gpr_sleep_until(gpr_time_add(gpr_now(GPR_CLOCK_REALTIME),
+                                 gpr_time_from_millis(delay, GPR_TIMESPAN)));
+    context.TryCancel();
+  });
+  Status s = stub_->Echo(&context, request, &response);
+  if (!s.ok()) {
+    EXPECT_TRUE(s.error_code() == StatusCode::CANCELLED ||
+                s.error_code() == StatusCode::UNAVAILABLE);
+  }
+  cancel_thread.join();
+}
+
 TEST_P(SecureEnd2endTest, NonBlockingAuthMetadataPluginFailure) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
   ClientContext context;
-  context.set_credentials(
-      MetadataCredentialsFromPlugin(std::unique_ptr<MetadataCredentialsPlugin>(
+  context.set_credentials(grpc::MetadataCredentialsFromPlugin(
+      std::unique_ptr<MetadataCredentialsPlugin>(
           new TestMetadataCredentialsPlugin(
               TestMetadataCredentialsPlugin::kGoodMetadataKey,
-              "Does not matter, will fail anyway (see 3rd param)", false,
-              false))));
+              "Does not matter, will fail anyway (see 3rd param)", false, false,
+              0))));
   request.set_message("Hello");
 
   Status s = stub_->Echo(&context, request, &response);
@@ -1720,6 +1945,7 @@ TEST_P(SecureEnd2endTest, NonBlockingAuthMetadataPluginFailure) {
 }
 
 TEST_P(SecureEnd2endTest, NonBlockingAuthMetadataPluginAndProcessorSuccess) {
+  MAYBE_SKIP_TEST;
   auto* processor = new TestAuthMetadataProcessor(false);
   StartServer(std::shared_ptr<AuthMetadataProcessor>(processor));
   ResetStub();
@@ -1745,6 +1971,7 @@ TEST_P(SecureEnd2endTest, NonBlockingAuthMetadataPluginAndProcessorSuccess) {
 }
 
 TEST_P(SecureEnd2endTest, NonBlockingAuthMetadataPluginAndProcessorFailure) {
+  MAYBE_SKIP_TEST;
   auto* processor = new TestAuthMetadataProcessor(false);
   StartServer(std::shared_ptr<AuthMetadataProcessor>(processor));
   ResetStub();
@@ -1760,16 +1987,17 @@ TEST_P(SecureEnd2endTest, NonBlockingAuthMetadataPluginAndProcessorFailure) {
 }
 
 TEST_P(SecureEnd2endTest, BlockingAuthMetadataPluginFailure) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
   ClientContext context;
-  context.set_credentials(
-      MetadataCredentialsFromPlugin(std::unique_ptr<MetadataCredentialsPlugin>(
+  context.set_credentials(grpc::MetadataCredentialsFromPlugin(
+      std::unique_ptr<MetadataCredentialsPlugin>(
           new TestMetadataCredentialsPlugin(
               TestMetadataCredentialsPlugin::kGoodMetadataKey,
-              "Does not matter, will fail anyway (see 3rd param)", true,
-              false))));
+              "Does not matter, will fail anyway (see 3rd param)", true, false,
+              0))));
   request.set_message("Hello");
 
   Status s = stub_->Echo(&context, request, &response);
@@ -1781,6 +2009,7 @@ TEST_P(SecureEnd2endTest, BlockingAuthMetadataPluginFailure) {
 }
 
 TEST_P(SecureEnd2endTest, CompositeCallCreds) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1790,13 +2019,15 @@ TEST_P(SecureEnd2endTest, CompositeCallCreds) {
   const char kMetadataVal1[] = "call-creds-val1";
   const char kMetadataVal2[] = "call-creds-val2";
 
-  context.set_credentials(CompositeCallCredentials(
-      MetadataCredentialsFromPlugin(std::unique_ptr<MetadataCredentialsPlugin>(
-          new TestMetadataCredentialsPlugin(kMetadataKey1, kMetadataVal1, true,
-                                            true))),
-      MetadataCredentialsFromPlugin(std::unique_ptr<MetadataCredentialsPlugin>(
-          new TestMetadataCredentialsPlugin(kMetadataKey2, kMetadataVal2, true,
-                                            true)))));
+  context.set_credentials(grpc::CompositeCallCredentials(
+      grpc::MetadataCredentialsFromPlugin(
+          std::unique_ptr<MetadataCredentialsPlugin>(
+              new TestMetadataCredentialsPlugin(kMetadataKey1, kMetadataVal1,
+                                                true, true, 0))),
+      grpc::MetadataCredentialsFromPlugin(
+          std::unique_ptr<MetadataCredentialsPlugin>(
+              new TestMetadataCredentialsPlugin(kMetadataKey2, kMetadataVal2,
+                                                true, true, 0)))));
   request.set_message("Hello");
   request.mutable_param()->set_echo_metadata(true);
 
@@ -1809,6 +2040,7 @@ TEST_P(SecureEnd2endTest, CompositeCallCreds) {
 }
 
 TEST_P(SecureEnd2endTest, ClientAuthContext) {
+  MAYBE_SKIP_TEST;
   ResetStub();
   EchoRequest request;
   EchoResponse response;
@@ -1853,6 +2085,7 @@ class ResourceQuotaEnd2endTest : public End2endTest {
 };
 
 TEST_P(ResourceQuotaEnd2endTest, SimpleRequest) {
+  MAYBE_SKIP_TEST;
   ResetStub();
 
   EchoRequest request;
@@ -1887,11 +2120,17 @@ std::vector<TestScenario> CreateTestScenarios(bool use_proxy,
     credentials_types.push_back(kInsecureCredentialsType);
   }
 
-  // For now test callback server only with inproc
+  // Test callback with inproc or if the event-engine allows it
   GPR_ASSERT(!credentials_types.empty());
   for (const auto& cred : credentials_types) {
     scenarios.emplace_back(false, false, false, cred, false);
     scenarios.emplace_back(true, false, false, cred, false);
+    if (test_callback_server) {
+      // Note that these scenarios will be dynamically disabled if the event
+      // engine doesn't run in the background
+      scenarios.emplace_back(false, false, false, cred, true);
+      scenarios.emplace_back(true, false, false, cred, true);
+    }
     if (use_proxy) {
       scenarios.emplace_back(false, true, false, cred, false);
       scenarios.emplace_back(true, true, false, cred, false);
@@ -1919,7 +2158,7 @@ INSTANTIATE_TEST_CASE_P(
 
 INSTANTIATE_TEST_CASE_P(
     ProxyEnd2end, ProxyEnd2endTest,
-    ::testing::ValuesIn(CreateTestScenarios(true, true, true, true, false)));
+    ::testing::ValuesIn(CreateTestScenarios(true, true, true, true, true)));
 
 INSTANTIATE_TEST_CASE_P(
     SecureEnd2end, SecureEnd2endTest,
@@ -1927,15 +2166,19 @@ INSTANTIATE_TEST_CASE_P(
 
 INSTANTIATE_TEST_CASE_P(
     ResourceQuotaEnd2end, ResourceQuotaEnd2endTest,
-    ::testing::ValuesIn(CreateTestScenarios(false, true, true, true, false)));
+    ::testing::ValuesIn(CreateTestScenarios(false, true, true, true, true)));
 
 }  // namespace
 }  // namespace testing
 }  // namespace grpc
 
 int main(int argc, char** argv) {
-  gpr_setenv("GRPC_CLIENT_CHANNEL_BACKUP_POLL_INTERVAL_MS", "200");
+  GPR_GLOBAL_CONFIG_SET(grpc_client_channel_backup_poll_interval_ms, 200);
   grpc::testing::TestEnvironment env(argc, argv);
+  // The grpc_init is to cover the MAYBE_SKIP_TEST.
+  grpc_init();
   ::testing::InitGoogleTest(&argc, argv);
-  return RUN_ALL_TESTS();
+  int ret = RUN_ALL_TESTS();
+  grpc_shutdown();
+  return ret;
 }

@@ -29,7 +29,7 @@
 #include "src/core/ext/transport/chttp2/transport/bin_encoder.h"
 #include "src/core/ext/transport/chttp2/transport/incoming_metadata.h"
 #include "src/core/ext/transport/cronet/transport/cronet_transport.h"
-#include "src/core/lib/gpr/host_port.h"
+#include "src/core/lib/debug/trace.h"
 #include "src/core/lib/gpr/string.h"
 #include "src/core/lib/gprpp/manual_constructor.h"
 #include "src/core/lib/iomgr/endpoint.h"
@@ -37,21 +37,21 @@
 #include "src/core/lib/slice/slice_internal.h"
 #include "src/core/lib/slice/slice_string_helpers.h"
 #include "src/core/lib/surface/channel.h"
+#include "src/core/lib/surface/validate_metadata.h"
 #include "src/core/lib/transport/metadata_batch.h"
 #include "src/core/lib/transport/static_metadata.h"
 #include "src/core/lib/transport/transport_impl.h"
+
 #include "third_party/objective_c/Cronet/bidirectional_stream_c.h"
 
 #define GRPC_HEADER_SIZE_IN_BYTES 5
 #define GRPC_FLUSH_READ_SIZE 4096
 
-#define CRONET_LOG(...)                          \
-  do {                                           \
-    if (grpc_cronet_trace) gpr_log(__VA_ARGS__); \
+grpc_core::TraceFlag grpc_cronet_trace(false, "cronet");
+#define CRONET_LOG(...)                                    \
+  do {                                                     \
+    if (grpc_cronet_trace.enabled()) gpr_log(__VA_ARGS__); \
   } while (0)
-
-/* TODO (makdharma): Hook up into the wider tracing mechanism */
-int grpc_cronet_trace = 0;
 
 enum e_op_result {
   ACTION_TAKEN_WITH_CALLBACK,
@@ -111,7 +111,7 @@ typedef struct grpc_cronet_transport grpc_cronet_transport;
 /* TODO (makdharma): reorder structure for memory efficiency per
    http://www.catb.org/esr/structure-packing/#_structure_reordering: */
 struct read_state {
-  read_state(gpr_arena* arena)
+  read_state(grpc_core::Arena* arena)
       : trailing_metadata(arena), initial_metadata(arena) {
     grpc_slice_buffer_init(&read_slice_buffer);
   }
@@ -145,7 +145,7 @@ struct write_state {
 
 /* track state of one stream op */
 struct op_state {
-  op_state(gpr_arena* arena) : rs(arena) {}
+  op_state(grpc_core::Arena* arena) : rs(arena) {}
 
   bool state_op_done[OP_NUM_OPS] = {};
   bool state_callback_received[OP_NUM_OPS] = {};
@@ -177,7 +177,7 @@ struct op_and_state {
   bool done = false;
   struct stream_obj* s; /* Pointer back to the stream object */
   /* next op_and_state in the linked list */
-  struct op_and_state* next;
+  struct op_and_state* next = nullptr;
 };
 
 struct op_storage {
@@ -187,10 +187,10 @@ struct op_storage {
 
 struct stream_obj {
   stream_obj(grpc_transport* gt, grpc_stream* gs,
-             grpc_stream_refcount* refcount, gpr_arena* arena);
+             grpc_stream_refcount* refcount, grpc_core::Arena* arena);
   ~stream_obj();
 
-  gpr_arena* arena;
+  grpc_core::Arena* arena;
   struct op_and_state* oas = nullptr;
   grpc_transport_stream_op_batch* curr_op = nullptr;
   grpc_cronet_transport* curr_ct;
@@ -324,7 +324,7 @@ static grpc_error* make_error_with_desc(int error_code, const char* desc) {
 
 inline op_and_state::op_and_state(stream_obj* s,
                                   const grpc_transport_stream_op_batch& op)
-    : op(op), state(s->arena), s(s), next(s->storage.head) {}
+    : op(op), state(s->arena), s(s) {}
 
 /*
   Add a new stream op to op storage.
@@ -335,10 +335,8 @@ static void add_to_storage(struct stream_obj* s,
   /* add new op at the beginning of the linked list. The memory is freed
   in remove_from_storage */
   op_and_state* new_op = grpc_core::New<op_and_state>(s, *op);
-  // Pontential fix to crash on GPR_ASSERT(!curr->done)
-  // TODO (mxyan): check if this is indeed necessary.
-  new_op->done = false;
   gpr_mu_lock(&s->mu);
+  new_op->next = storage->head;
   storage->head = new_op;
   storage->num_pending_ops++;
   if (op->send_message) {
@@ -422,7 +420,7 @@ static void convert_cronet_array_to_metadata(
     grpc_slice key = grpc_slice_intern(
         grpc_slice_from_static_string(header_array->headers[i].key));
     grpc_slice value;
-    if (grpc_is_binary_header(key)) {
+    if (grpc_is_refcounted_slice_binary_header(key)) {
       value = grpc_slice_from_static_string(header_array->headers[i].value);
       value = grpc_slice_intern(grpc_chttp2_base64_decode_with_length(
           value, grpc_chttp2_base64_infer_length_after_decode(value)));
@@ -441,6 +439,7 @@ static void convert_cronet_array_to_metadata(
 */
 static void on_failed(bidirectional_stream* stream, int net_error) {
   gpr_log(GPR_ERROR, "on_failed(%p, %d)", stream, net_error);
+  grpc_core::ApplicationCallbackExecCtx callback_exec_ctx;
   grpc_core::ExecCtx exec_ctx;
 
   stream_obj* s = static_cast<stream_obj*>(stream->annotation);
@@ -467,6 +466,7 @@ static void on_failed(bidirectional_stream* stream, int net_error) {
 */
 static void on_canceled(bidirectional_stream* stream) {
   CRONET_LOG(GPR_DEBUG, "on_canceled(%p)", stream);
+  grpc_core::ApplicationCallbackExecCtx callback_exec_ctx;
   grpc_core::ExecCtx exec_ctx;
 
   stream_obj* s = static_cast<stream_obj*>(stream->annotation);
@@ -493,6 +493,7 @@ static void on_canceled(bidirectional_stream* stream) {
 */
 static void on_succeeded(bidirectional_stream* stream) {
   CRONET_LOG(GPR_DEBUG, "on_succeeded(%p)", stream);
+  grpc_core::ApplicationCallbackExecCtx callback_exec_ctx;
   grpc_core::ExecCtx exec_ctx;
 
   stream_obj* s = static_cast<stream_obj*>(stream->annotation);
@@ -511,6 +512,7 @@ static void on_succeeded(bidirectional_stream* stream) {
 */
 static void on_stream_ready(bidirectional_stream* stream) {
   CRONET_LOG(GPR_DEBUG, "W: on_stream_ready(%p)", stream);
+  grpc_core::ApplicationCallbackExecCtx callback_exec_ctx;
   grpc_core::ExecCtx exec_ctx;
   stream_obj* s = static_cast<stream_obj*>(stream->annotation);
   grpc_cronet_transport* t = s->curr_ct;
@@ -541,6 +543,7 @@ static void on_response_headers_received(
     bidirectional_stream* stream,
     const bidirectional_stream_header_array* headers,
     const char* negotiated_protocol) {
+  grpc_core::ApplicationCallbackExecCtx callback_exec_ctx;
   grpc_core::ExecCtx exec_ctx;
   CRONET_LOG(GPR_DEBUG, "R: on_response_headers_received(%p, %p, %s)", stream,
              headers, negotiated_protocol);
@@ -580,6 +583,7 @@ static void on_response_headers_received(
   Cronet callback
 */
 static void on_write_completed(bidirectional_stream* stream, const char* data) {
+  grpc_core::ApplicationCallbackExecCtx callback_exec_ctx;
   grpc_core::ExecCtx exec_ctx;
   stream_obj* s = static_cast<stream_obj*>(stream->annotation);
   CRONET_LOG(GPR_DEBUG, "W: on_write_completed(%p, %s)", stream, data);
@@ -598,6 +602,7 @@ static void on_write_completed(bidirectional_stream* stream, const char* data) {
 */
 static void on_read_completed(bidirectional_stream* stream, char* data,
                               int count) {
+  grpc_core::ApplicationCallbackExecCtx callback_exec_ctx;
   grpc_core::ExecCtx exec_ctx;
   stream_obj* s = static_cast<stream_obj*>(stream->annotation);
   CRONET_LOG(GPR_DEBUG, "R: on_read_completed(%p, %p, %d)", stream, data,
@@ -640,6 +645,7 @@ static void on_read_completed(bidirectional_stream* stream, char* data,
 static void on_response_trailers_received(
     bidirectional_stream* stream,
     const bidirectional_stream_header_array* trailers) {
+  grpc_core::ApplicationCallbackExecCtx callback_exec_ctx;
   grpc_core::ExecCtx exec_ctx;
   CRONET_LOG(GPR_DEBUG, "R: on_response_trailers_received(%p,%p)", stream,
              trailers);
@@ -741,22 +747,23 @@ static void convert_metadata_to_cronet_headers(
     curr = curr->next;
     char* key = grpc_slice_to_c_string(GRPC_MDKEY(mdelem));
     char* value;
-    if (grpc_is_binary_header(GRPC_MDKEY(mdelem))) {
+    if (grpc_is_binary_header_internal(GRPC_MDKEY(mdelem))) {
       grpc_slice wire_value = grpc_chttp2_base64_encode(GRPC_MDVALUE(mdelem));
       value = grpc_slice_to_c_string(wire_value);
       grpc_slice_unref_internal(wire_value);
     } else {
       value = grpc_slice_to_c_string(GRPC_MDVALUE(mdelem));
     }
-    if (grpc_slice_eq(GRPC_MDKEY(mdelem), GRPC_MDSTR_SCHEME) ||
-        grpc_slice_eq(GRPC_MDKEY(mdelem), GRPC_MDSTR_AUTHORITY)) {
+    if (grpc_slice_eq_static_interned(GRPC_MDKEY(mdelem), GRPC_MDSTR_SCHEME) ||
+        grpc_slice_eq_static_interned(GRPC_MDKEY(mdelem),
+                                      GRPC_MDSTR_AUTHORITY)) {
       /* Cronet populates these fields on its own */
       gpr_free(key);
       gpr_free(value);
       continue;
     }
-    if (grpc_slice_eq(GRPC_MDKEY(mdelem), GRPC_MDSTR_METHOD)) {
-      if (grpc_slice_eq(GRPC_MDVALUE(mdelem), GRPC_MDSTR_PUT)) {
+    if (grpc_slice_eq_static_interned(GRPC_MDKEY(mdelem), GRPC_MDSTR_METHOD)) {
+      if (grpc_slice_eq_static_interned(GRPC_MDVALUE(mdelem), GRPC_MDSTR_PUT)) {
         *method = "PUT";
       } else {
         /* POST method in default*/
@@ -766,7 +773,7 @@ static void convert_metadata_to_cronet_headers(
       gpr_free(value);
       continue;
     }
-    if (grpc_slice_eq(GRPC_MDKEY(mdelem), GRPC_MDSTR_PATH)) {
+    if (grpc_slice_eq_static_interned(GRPC_MDKEY(mdelem), GRPC_MDSTR_PATH)) {
       /* Create URL by appending :path value to the hostname */
       gpr_asprintf(pp_url, "https://%s%s", host, value);
       gpr_free(key);
@@ -798,7 +805,8 @@ static void parse_grpc_header(const uint8_t* data, int* length,
 
 static bool header_has_authority(grpc_linked_mdelem* head) {
   while (head != nullptr) {
-    if (grpc_slice_eq(GRPC_MDKEY(head->md), GRPC_MDSTR_AUTHORITY)) {
+    if (grpc_slice_eq_static_interned(GRPC_MDKEY(head->md),
+                                      GRPC_MDSTR_AUTHORITY)) {
       return true;
     }
     head = head->next;
@@ -1363,7 +1371,8 @@ static enum e_op_result execute_stream_op(struct op_and_state* oas) {
 */
 
 inline stream_obj::stream_obj(grpc_transport* gt, grpc_stream* gs,
-                              grpc_stream_refcount* refcount, gpr_arena* arena)
+                              grpc_stream_refcount* refcount,
+                              grpc_core::Arena* arena)
     : arena(arena),
       curr_ct(reinterpret_cast<grpc_cronet_transport*>(gt)),
       curr_gs(gs),
@@ -1382,7 +1391,7 @@ inline stream_obj::~stream_obj() {
 
 static int init_stream(grpc_transport* gt, grpc_stream* gs,
                        grpc_stream_refcount* refcount, const void* server_data,
-                       gpr_arena* arena) {
+                       grpc_core::Arena* arena) {
   new (gs) stream_obj(gt, gs, refcount, arena);
   return 0;
 }
